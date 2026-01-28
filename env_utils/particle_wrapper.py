@@ -64,7 +64,7 @@ class ParticleFilter(Wrapper):
         new_weights = new_weights_unnormalized / new_weights_unnormalized.sum()
 
         # Vectorized state estimate computation
-        self.state_estimate = (new_weights * new_states).sum(axis=0)
+        self.state_estimate = (new_weights.reshape(-1,1) * new_states).sum(axis=0)
 
         # step 3: resampling
         # Compute effective sample size
