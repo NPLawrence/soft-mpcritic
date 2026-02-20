@@ -40,7 +40,7 @@ class MPPI():
         self.inv_cov = torch.inverse(self.cov)
         self.noise_dist = MultivariateNormal(self.mean, covariance_matrix=self.cov)
 
-        self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) # .repeat(1, self.P, 1, 1) # initial action sequence shared amongst particles
+        self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) # initial action sequence shared amongst particles
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
         self.u_init = torch.zeros_like(self.mean) if (u_init is None) else u_init # initialization for last action of trajectory at each step
         
@@ -48,12 +48,9 @@ class MPPI():
         self.info = None
 
         # sampled results from last command
-        self.cost_total = None
-        self.cost_total_non_zero = None
-        self.omega = None
         self.rollout_observation = None
         self.rollout_observations = None
-        self.actions = None
+        self.rollout_actions = None
 
     @torch.no_grad()
     def make_step(self, observation):
@@ -61,8 +58,8 @@ class MPPI():
         self.observation = torch.tensor(observation).to(dtype=self.dtype).view(self.B, self.P, self.ns)
 
         # initialize action sequence with previous solution
-        self.U = torch.roll(self.U, -1, dims=1)
-        self.U[:,-1] = self.u_init
+        self.U = torch.roll(self.U, -1, dims=2)
+        self.U[:,:,-1] = self.u_init
 
         # calculate batch B actions where each of B is computed across P particles for K noise sequences
         for b in range(self.B):
@@ -98,7 +95,7 @@ class MPPI():
             perturbations = torch.sum(omega.view(-1, 1, 1) * rep_noise, dim=0) # (26) summation
             self.U[b] = self.U[b] + perturbations # (26)
 
-        action = self.U[:,0]
+        action = self.U[:,0,[0]] # first action in sequence actions across batch
         return action.numpy()
     
     def _compute_rollout_costs(self, rollout_observation):
@@ -132,7 +129,7 @@ class MPPI():
 
         # Actions is K x T x nu or K x T+1 x nu if self.Q
         # Observations is K x T+1 x nx or K x T+2 x ns if self.Q
-        self.actions = torch.stack(actions, dim=-2)
+        self.rollout_actions = torch.stack(actions, dim=-2)
         self.rollout_observations = torch.stack(observations, dim=-2)
 
         return rollout_cost
@@ -172,16 +169,12 @@ class MPPI():
 
     def reset(self, U_init=None):
         """reinitialize all MPPI computations"""
-        self.U = self.noise_dist.sample((self.T+1,)) if (U_init is None) else U_init
-        self.rollout_observation = None
+        self.U = U_init if U_init else self.noise_dist.sample((self.B, 1, self.T+1,))
+        self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
         self.observation = None
-        self.info = None
-        self.cost_total = None
-        self.cost_total_non_zero = None
-        self.omega = None
+        self.rollout_observation = None
         self.rollout_observations = None
-        self.actions = None
-        self.noise = None
+        self.rollout_actions = None
 
 if __name__ == '__main__':
     import gymnasium as gym
