@@ -13,12 +13,12 @@ class MPPI():
         self.env = env
         self.rollout_envs = rollout_envs
         self.env_dtype = self.env.observation_space.dtype
-        self.dtype = torch.from_numpy(np.array([], dtype=self.env_dtype)).dtype
+        self.dtype = torch.float32
 
         self.ns = np.prod(self.env.observation_space.shape)
         self.nu = np.prod(self.env.action_space.shape)
-        self.u_min = torch.from_numpy(self.env.action_space.low)
-        self.u_max = torch.from_numpy(self.env.action_space.high)
+        self.u_min = torch.from_numpy(self.env.action_space.low).to(dtype=self.dtype)
+        self.u_max = torch.from_numpy(self.env.action_space.high).to(dtype=self.dtype)
 
         self.l = l # stage cost
         self.f = f # dynamics
@@ -35,8 +35,8 @@ class MPPI():
             assert self.rollout_envs.num_envs == self.K # one rollout_env for each sample
 
         self.lambda_ = lambda_ # free energy scale/parameter
-        self.mean = torch.zeros(self.nu, dtype=self.dtype) if (mean is None) else mean # mean of action noise distribution
-        self.cov = torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(self.dtype) # covariance matrix of action noise distribution
+        self.mean = torch.zeros(self.nu, dtype=self.dtype) if (mean is None) else mean.to(dtype=self.dtype) # mean of action noise distribution
+        self.cov = torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of action noise distribution
         self.inv_cov = torch.inverse(self.cov)
         self.noise_dist = MultivariateNormal(self.mean, covariance_matrix=self.cov)
 
@@ -55,7 +55,7 @@ class MPPI():
     @torch.no_grad()
     def make_step(self, observation):
         """return action for given observation"""
-        self.observation = torch.tensor(observation).to(dtype=self.dtype).view(self.B, self.P, self.ns)
+        self.observation = torch.tensor(observation, dtype=self.dtype).view(self.B, self.P, self.ns)
 
         # initialize action sequence with previous solution
         self.U = torch.roll(self.U, -1, dims=2)
@@ -118,7 +118,7 @@ class MPPI():
             observations.append(observation)
 
         if self.Q is not None:
-            action = self._get_perturbed_action(observation, self.T+1)
+            action = self._get_perturbed_action(observation, self.T)
             rollout_cost += -self.Q(observation, action).flatten()
 
             next_observation, _ = self._step_rollout(observation, action)
@@ -136,6 +136,7 @@ class MPPI():
     
     def _get_perturbed_action(self, observation, t):
         if self.mu:
+            print(self.mu(observation))
             self.U[self.b, :, t] = self.mu(observation)
         
         # v = u + \epsilon; broadcast U to noise over noise; now it's K x nu
@@ -156,10 +157,10 @@ class MPPI():
     def _step_rollout(self, observation, action):
         """step the trajectory forward with the appropriate dynamics and cost models or environments"""
         if self.f is not None:
-            return self.f(observation, action), self.l(observation, action).flatten()
+            return self.f(observation, action).to(self.dtype), self.l(observation, action).flatten().to(self.dtype)
         else:
             next_observation, rewards, terminations, truncations, infos = self.rollout_envs.step(action.numpy())
-            return torch.from_numpy(next_observation).view(self.K, self.ns), -torch.from_numpy(rewards)
+            return torch.from_numpy(next_observation).view(self.K, self.ns).to(self.dtype), -torch.from_numpy(rewards).to(self.dtype)
 
     def _sync_envs(self, observation):
         """align the mppi environments"""

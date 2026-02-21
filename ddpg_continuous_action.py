@@ -34,7 +34,7 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
-    capture_video: bool = True
+    capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
     save_model: bool = False
     """whether to save model into the `runs/{run_name}` folder"""
@@ -70,13 +70,13 @@ class Args:
     """use MPPI online (making extra envs)"""
     env_in_mppi: bool = True
     """use the environment for MPPI rollouts"""
-    mu_in_mppi: bool = False
+    mu_in_mppi: bool = True
     """use policy mean in MPPI rollouts"""
-    Q_in_mppi: bool = False
+    Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
     mppi_targets: bool = False
     """use MPPI for Q-function targets"""
-    horizon: int = 20
+    horizon: int = 10
     """length of MPPI rollouts/trajectories"""
     num_rollouts: int = 100
     """number of rollouts/trajectory samples for MPPI"""
@@ -99,17 +99,6 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         return env
 
     return thunk
-
-# def make_env(env_id, seed, idx, capture_video, run_name):
-#     if capture_video and idx == 0:
-#         env = gym.make(env_id, render_mode="rgb_array")
-#         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-#     else:
-#         env = gym.make(env_id)
-#     env = gym.wrappers.RecordEpisodeStatistics(env)
-#     env = BaseEnvWrapper(env)
-#     env.action_space.seed(seed)
-#     return env
 
 # ALGO LOGIC: initialize agent here:
 class QNetwork(nn.Module):
@@ -197,7 +186,7 @@ if __name__ == "__main__":
     if args.mppi:
         Q = qf1 if args.Q_in_mppi else None
         mu = actor if args.mu_in_mppi else None
-        cov = args.var*torch.diag(torch.ones(np.prod(envs.single_action_space.shape)))
+        cov = args.var*torch.diag(torch.ones(np.prod(envs.single_action_space.shape), dtype=torch.float32))
 
         if args.env_in_mppi:
             mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, Q=Q, mu=mu, cov=cov,
@@ -232,7 +221,7 @@ if __name__ == "__main__":
         else:
             with torch.no_grad():
                 if not args.mppi:
-                    actions = actor(torch.Tensor(obs).to(device))
+                    actions = actor(torch.Tensor(obs).to(dtype=torch.float32).to(device))
                     actions += torch.normal(0, actor.action_scale * args.exploration_noise)
                     actions = actions.cpu().numpy().clip(envs.single_action_space.low, envs.single_action_space.high)
                 else:
@@ -264,7 +253,7 @@ if __name__ == "__main__":
         for idx, final in enumerate(np.logical_or(terminations, truncations)):
             if final:
                 real_next_obs[idx] = infos["final_obs"][idx]
-                if mppi:
+                if args.mppi:
                     mppi.reset()
         rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
 

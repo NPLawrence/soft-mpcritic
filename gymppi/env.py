@@ -10,6 +10,14 @@ class BaseEnvWrapper(gymnasium.Wrapper):
     def __init__(self, env):
         gymnasium.Wrapper.__init__(self, env)
 
+    def reset(self, *, seed=None, options=None):
+        obs, info = super().reset(seed=seed, options=options)
+        return obs.astype(np.float32), info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = super().step(action)
+        return obs.astype(np.float32), reward, terminated, truncated, info
+
     @property
     def _extra(self):
         """extra stuff not in observations necessary to represent the full system state"""
@@ -31,7 +39,7 @@ class ClassicMPPIWrapper(gymnasium.Wrapper):
     def step(self, action):
         obs, reward, terminated, truncated, info = super().step(action)
         terminated, truncated = False, False # don't stop MPPI rollouts early
-        return obs, reward, terminated, truncated, info
+        return obs.astype(np.float32), reward, terminated, truncated, info
     
     def obs2state(self, observation):
         if self.env_id == 'Pendulum-v1':
@@ -65,7 +73,7 @@ class ClassicMPPIWrapper(gymnasium.Wrapper):
 
         info = {}
 
-        return observation, info
+        return observation.astype(np.float32), info
 
 
 class MujocoMPPIWrapper(gymnasium.Wrapper):
@@ -79,7 +87,7 @@ class MujocoMPPIWrapper(gymnasium.Wrapper):
     def step(self, action):
         obs, reward, terminated, truncated, info = super().step(action)
         terminated, truncated = False, False # don't stop MPPI rollouts early
-        return obs, reward, terminated, truncated, info
+        return obs.astype(np.float32), reward, terminated, truncated, info
 
     def obs2state(self, observation, extra=None):
         if self.env_id == 'InvertedPendulum-v5':
@@ -139,4 +147,4 @@ class MujocoMPPIWrapper(gymnasium.Wrapper):
         obs = self.env.unwrapped._get_obs()
         info = self.env.unwrapped._get_reset_info()
 
-        return obs, info
+        return obs.astype(np.float32), info
