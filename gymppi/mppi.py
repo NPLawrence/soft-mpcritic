@@ -136,11 +136,10 @@ class MPPI():
     
     def _get_perturbed_action(self, observation, t):
         if self.mu:
-            print(self.mu(observation))
-            self.U[self.b, :, t] = self.mu(observation)
-        
-        # v = u + \epsilon; broadcast U to noise over noise; now it's K x nu
-        perturbed_action = self.U[self.b, :, t] + self.noise[self.b, :, t] # noise shared among particles
+            perturbed_action = self.mu(observation) + self.noise[self.b, :, t] # noise shared among particles
+        else:
+            # v = u + \epsilon; broadcast U to noise over noise; now it's K x nu
+            perturbed_action = self.U[self.b, :, t] + self.noise[self.b, :, t] # noise shared among particles
         # ensure actions are within action space
         perturbed_action = self._bound_action(perturbed_action)
         # reflect action constraints in noise
