@@ -70,15 +70,15 @@ class Args:
     """use MPPI online (making extra envs)"""
     env_in_mppi: bool = True
     """use the environment for MPPI rollouts"""
-    mu_in_mppi: bool = True
+    mu_in_mppi: bool = False
     """use policy mean in MPPI rollouts"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
     mppi_targets: bool = False
     """use MPPI for Q-function targets"""
-    horizon: int = 10
+    horizon: int = 2
     """length of MPPI rollouts/trajectories"""
-    num_rollouts: int = 100
+    num_rollouts: int = 20
     """number of rollouts/trajectory samples for MPPI"""
     num_particles: int = 1
     """number of states/particles to rollout from"""
