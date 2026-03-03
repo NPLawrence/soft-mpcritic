@@ -36,7 +36,7 @@ class MPPI():
 
         self.lambda_ = lambda_ # free energy scale/parameter
         self.mean = torch.zeros(self.nu, dtype=self.dtype) if (mean is None) else mean.to(dtype=self.dtype) # mean of action noise distribution
-        self.cov = torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of action noise distribution
+        self.cov = 1.0*torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of action noise distribution
         self.inv_cov = torch.inverse(self.cov)
         self.noise_dist = MultivariateNormal(self.mean, covariance_matrix=self.cov)
 
@@ -95,7 +95,14 @@ class MPPI():
             perturbations = torch.sum(omega.view(-1, 1, 1) * rep_noise, dim=0) # (26) summation
             self.U[b] = self.U[b] + perturbations # (26)
 
-        action = self.U[:,0,[0]] # first action in sequence actions across batch
+        if self.mu:
+            action = self.mu(self.observation) + self.U[:,0,[0]] # first action in sequence actions across batch
+        else:
+            action = self.U[:,0,[0]] # first action in sequence actions across batch
+        
+        # Ensure action is within bounds
+        action = self._bound_action(action)
+        
         return action.numpy()
     
     def _compute_rollout_costs(self, rollout_observation):
@@ -107,8 +114,16 @@ class MPPI():
         actions = []
 
         for t in range(self.T):
-            action = self._get_perturbed_action(observation, t)
-
+            residual = self._get_perturbed_action(observation, t)
+            
+            if self.mu:
+                action = self.mu(observation) + residual
+            else:
+                action = residual
+            
+            # Ensure action is within bounds
+            action = self._bound_action(action)
+            
             next_observation, l = self._step_rollout(observation, action)
             rollout_cost += l
 
@@ -118,7 +133,16 @@ class MPPI():
             observations.append(observation)
 
         if self.Q is not None:
-            action = self._get_perturbed_action(observation, self.T)
+            residual = self._get_perturbed_action(observation, self.T)
+            
+            if self.mu:
+                action = self.mu(observation) + residual
+            else:
+                action = residual
+            
+            # Ensure action is within bounds
+            action = self._bound_action(action)
+            
             rollout_cost += -self.Q(observation, action).flatten()
 
             next_observation, _ = self._step_rollout(observation, action)
@@ -135,17 +159,13 @@ class MPPI():
         return rollout_cost
     
     def _get_perturbed_action(self, observation, t):
-        if self.mu:
-            perturbed_action = self.mu(observation) + self.noise[self.b, :, t] # noise shared among particles
-        else:
-            # v = u + \epsilon; broadcast U to noise over noise; now it's K x nu
-            perturbed_action = self.U[self.b, :, t] + self.noise[self.b, :, t] # noise shared among particles
-        # ensure actions are within action space
-        perturbed_action = self._bound_action(perturbed_action)
-        # reflect action constraints in noise
-        self.noise[self.b, :, t] = perturbed_action - self.U[self.b, :, t]
+        # Return residual action: U + noise (to be added to mu if available)
+        residual = self.U[self.b, :, t] + self.noise[self.b, :, t]  # [K, nu]
+        
+        # Update noise to reflect any constraints applied later
+        self.noise[self.b, :, t] = residual - self.U[self.b, :, t]
 
-        return perturbed_action
+        return residual
 
     def _bound_action(self, action):
         """bound action within action space"""
