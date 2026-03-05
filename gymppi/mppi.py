@@ -30,7 +30,7 @@ class MPPI():
         self.P = P # number of particles
         self.K = K # number of trajectory samples
         self.T = T # length of trajectories/horizon
-        self.discounting = self.gamma**torch.arange(self.T+1).view(1,-1,1)
+        self.discounting = self.gamma**torch.arange(self.T+1)
 
         assert (self.f and self.l) or self.rollout_envs # use either (f,l) or rollout_envs to simulate rollouts
         if self.rollout_envs:
@@ -82,7 +82,7 @@ class MPPI():
 
             rollout_cost = torch.cat(rollout_costs, dim=0)
             action_cost = self.lambda_ * self.noise[b] @ self.inv_cov # (24) inner summation
-            perturbation_cost = torch.sum(self.discounting * self.U[b] * action_cost, dim=(1, 2)) # (24) inner summation
+            perturbation_cost = torch.sum(self.discounting.view(1,-1,1) * self.U[b] * action_cost, dim=(1, 2)) # (24) inner summation
 
             # repeating cost for across P particles because noise is shared
             perturbation_cost = perturbation_cost.repeat(self.P)
@@ -97,7 +97,7 @@ class MPPI():
                 # negative of "free energy" as approximately max_a Q(s,a)
                 logmeanexp = torch.log(torch.mean(cost_total_non_zero)) # compute log sum exp for trajectories
                 term1 = -self.lambda_ * (-beta/self.lambda_ + logmeanexp) # energy accounting for added beta/lambda in exp
-                term2 = self.lambda_/2 * torch.sum(self.discounting * self.U[b] * (self.U[b] @ self.inv_cov), dim=(1, 2)) # mean term correction (shared among trajectories)
+                term2 = self.lambda_/2 * torch.sum(self.discounting.view(1,-1,1) * self.U[b] * (self.U[b] @ self.inv_cov), dim=(1, 2)) # mean term correction (shared among trajectories)
                 self.value[b] = -(term1 + term2) # compute F(s)
 
             eta = torch.sum(cost_total_non_zero) # (25)
