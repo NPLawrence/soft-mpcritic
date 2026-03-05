@@ -71,7 +71,7 @@ class Args:
     """use MPPI online (making extra envs)"""
     env_in_mppi: bool = True
     """use the environment for MPPI rollouts"""
-    mu_in_mppi: bool = False
+    mu_in_mppi: bool = True
     """use policy mean in MPPI rollouts"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
