@@ -9,7 +9,7 @@ from torch.distributions import MultivariateNormal
 
 
 class MPPI():
-    def __init__(self, env, rollout_envs=None, gamma=0.99, l=None, f=None, Q=None, mu=None, B=1, P=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None):
+    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, P=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None):
         self.env = env
         self.rollout_envs = rollout_envs
         self.env_dtype = self.env.observation_space.dtype
@@ -21,18 +21,17 @@ class MPPI():
         self.u_max = torch.from_numpy(self.env.action_space.high).to(dtype=self.dtype)
 
         self.gamma = gamma
-        self.l = l # stage cost
-        self.f = f # dynamics
-        self.Q = Q # terminal value function (assumes we want u^* = argmin Q(s,a))
+        self.transition_model = transition_model # model of p(s',r|s,a)
+        self.Q = Q # terminal value function (goal is to minimize u^* = argmin -Q(s,a))
         self.mu = mu # controller
 
         self.B = B # batch size
         self.P = P # number of particles
         self.K = K # number of trajectory samples
         self.T = T # length of trajectories/horizon
-        self.discounting = self.gamma**torch.arange(self.T+1).view(1,-1,1)
+        self.discounting = self.gamma**torch.arange(self.T+1).view(-1,1)
 
-        assert (self.f and self.l) or self.rollout_envs # use either (f,l) or rollout_envs to simulate rollouts
+        assert self.transition_model or self.rollout_envs # use either (f,l) or rollout_envs to simulate rollouts
         if self.rollout_envs:
             assert self.rollout_envs.num_envs == self.K # one rollout_env for each sample
 
@@ -82,7 +81,7 @@ class MPPI():
 
             rollout_cost = torch.cat(rollout_costs, dim=0)
             action_cost = self.lambda_ * self.noise[b] @ self.inv_cov # (24) inner summation
-            perturbation_cost = torch.sum(self.discounting * self.U[b] * action_cost, dim=(1, 2)) # (24) inner summation
+            perturbation_cost = torch.sum(self.discounting.view(1,-1,1) * self.U[b] * action_cost, dim=(1, 2)) # (24) inner summation
 
             # repeating cost for across P particles because noise is shared
             perturbation_cost = perturbation_cost.repeat(self.P)
@@ -97,7 +96,7 @@ class MPPI():
                 # negative of "free energy" as approximately max_a Q(s,a)
                 logmeanexp = torch.log(torch.mean(cost_total_non_zero)) # compute log sum exp for trajectories
                 term1 = -self.lambda_ * (-beta/self.lambda_ + logmeanexp) # energy accounting for added beta/lambda in exp
-                term2 = self.lambda_/2 * torch.sum(self.discounting * self.U[b] * (self.U[b] @ self.inv_cov), dim=(1, 2)) # mean term correction (shared among trajectories)
+                term2 = self.lambda_/2 * torch.sum(self.discounting.view(1,-1,1) * self.U[b] * (self.U[b] @ self.inv_cov), dim=(1, 2)) # mean term correction (shared among trajectories)
                 self.value[b] = -(term1 + term2) # compute F(s)
 
             eta = torch.sum(cost_total_non_zero) # (25)
@@ -192,8 +191,9 @@ class MPPI():
 
     def _step_rollout(self, observation, action):
         """step the trajectory forward with the appropriate dynamics and cost models or environments"""
-        if self.f is not None:
-            return self.f(observation, action).to(self.dtype), self.l(observation, action).flatten().to(self.dtype)
+        if self.transition_model is not None:
+            next_observations, rewards = self.transition_model(observation, action)
+            return next_observations.to(self.dtype), rewards.flatten().to(self.dtype)
         else:
             next_observation, rewards, terminations, truncations, infos = self.rollout_envs.step(action.numpy())
             return torch.from_numpy(next_observation).view(self.K, self.ns).to(self.dtype), -torch.from_numpy(rewards).to(self.dtype)

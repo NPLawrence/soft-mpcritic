@@ -18,6 +18,7 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from gymppi.mppi import MPPI
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
+from gymppi.networks import JointMLP
 
 @dataclass
 class Args:
@@ -31,7 +32,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "mppi_targets"
+    wandb_project_name: str = "mppi_targets" # "transition_model"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -47,7 +48,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "InvertedPendulum-v5"
     """the environment id of the Atari game"""
-    total_timesteps: int = 50000
+    total_timesteps: int = 25000
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
@@ -71,7 +72,7 @@ class Args:
     """use MPPI online (making extra envs)"""
     env_in_mppi: bool = True
     """use the environment for MPPI rollouts"""
-    mu_in_mppi: bool = True
+    mu_in_mppi: bool = False
     """use policy mean in MPPI rollouts"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
@@ -91,6 +92,8 @@ class Args:
     """temperature parameter in MPPI"""
     vectorization_mode: str = 'sync'
     """vectorization mode for gymnasium mppi rollouts"""
+    transition_frequency: int = 2
+    """the frequency of training the transition model"""
 
 
 def make_env(env_id, seed, idx, capture_video, run_name):
@@ -198,16 +201,21 @@ def train(args):
             mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=Q, mu=mu,
                         B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
                         lambda_=args.lambda_, cov=cov)
+            if args.mppi_targets:
+                target_mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
+                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
+                                lambda_=args.lambda_, cov=cov)
         else:
-            f = ...
-            l = ...
-            mppi = MPPI(envs, f=f, l=l, Q=Q, mu=mu,
-                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts)
-            
-        if args.mppi_targets:
-            target_mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                               B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
-                               lambda_=args.lambda_, cov=cov)
+            transition_model = JointMLP(env=envs.envs[0])
+            transition_optimizer = optim.Adam(list(transition_model.parameters()), lr=args.learning_rate)
+
+            mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=mu,
+                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
+                        lambda_=args.lambda_, cov=cov)
+            if args.mppi_targets:
+                target_mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
+                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
+                                lambda_=args.lambda_, cov=cov)
 
     envs.single_observation_space.dtype = np.float32
     rb = WarmstartReplayBuffer(
@@ -311,10 +319,22 @@ def train(args):
                 for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
                     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
 
+            if not args.env_in_mppi and (global_step % args.transition_frequency == 0):
+                pred_next_observations, pred_rewards = transition_model(data.observations, data.actions)
+                transition_loss = F.mse_loss(pred_next_observations, data.next_observations) + F.mse_loss(pred_rewards, data.rewards)
+                
+                # Optimize the model
+                transition_optimizer.zero_grad()
+                transition_loss.backward()
+                transition_optimizer.step()
+            else:
+                transition_loss = torch.tensor([0.])
+
             if global_step % 100 == 0:
                 writer.add_scalar("losses/qf1_values", qf1_a_values.mean().item(), global_step)
                 writer.add_scalar("losses/qf1_loss", qf1_loss.item(), global_step)
                 writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
+                writer.add_scalar("losses/transition_loss", transition_loss.item(), global_step)
                 print("SPS:", int(global_step / (time.time() - start_time)))
                 writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
@@ -350,10 +370,14 @@ def train(args):
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
-    for seed in range(3):
-        args.seed = seed
-        for num_rollouts in [10,20,50,100]:
-            args.num_rollouts = num_rollouts
-            for mppi_target_warmstart in [True, False]:
-                args.mppi_target_warmstart = mppi_target_warmstart
-                train(args)
+    # for seed in range(3):
+    #     args.seed = seed
+    #     for num_rollouts in [10,20,50,100]:
+    #         args.num_rollouts = num_rollouts
+    #         for mppi_target_warmstart in [True, False]:
+    #             args.mppi_target_warmstart = mppi_target_warmstart
+    #             train(args)
+    args.seed = 1
+    args.num_rollouts = 50
+    args.mppi_target_warmstart = True
+    train(args)

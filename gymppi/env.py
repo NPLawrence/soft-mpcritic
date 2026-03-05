@@ -28,6 +28,21 @@ class BaseEnvWrapper(gymnasium.Wrapper):
             if 'reacher' in self.env.unwrapped.spec.entry_point:
                 return {'goal_position':self.env.unwrapped.data.qpos[-2:],
                         'goal_velocity':self.env.unwrapped.data.qvel[-2:]}
+            
+    @property
+    def reward_bounds(self):
+        """approximate bounds on the reward for all environments"""
+        if 'mujoco' in self.env.unwrapped.spec.entry_point:
+            if self.env_id == 'InvertedPendulum-v5':
+                return {'low': 0, 'high': 1}
+            if self.env_id == 'InvertedDoublePendulum-v5':
+                return {'low': -10, 'high': 10} # unsure on lower bound
+            if self.env_id == 'Swimmer-v5':
+                return {'low': -10, 'high': 10} # unsure on both bounds
+            if self.env_id == 'Reacher-v5':
+                return {'low': -10, 'high': 0} # unsure on lower bound
+            if self.env_id == 'Hopper-v5':
+                return {'low': -10, 'high': 10} # unsure on both bounds
 
 
 class ClassicMPPIWrapper(gymnasium.Wrapper):
