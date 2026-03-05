@@ -9,7 +9,7 @@ from torch.distributions import MultivariateNormal
 
 
 class MPPI():
-    def __init__(self, env, rollout_envs=None, l=None, f=None, Q=None, mu=None, B=1, P=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None):
+    def __init__(self, env, rollout_envs=None, gamma=0.99, l=None, f=None, Q=None, mu=None, B=1, P=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None):
         self.env = env
         self.rollout_envs = rollout_envs
         self.env_dtype = self.env.observation_space.dtype
@@ -20,15 +20,17 @@ class MPPI():
         self.u_min = torch.from_numpy(self.env.action_space.low).to(dtype=self.dtype)
         self.u_max = torch.from_numpy(self.env.action_space.high).to(dtype=self.dtype)
 
+        self.gamma = gamma
         self.l = l # stage cost
         self.f = f # dynamics
-        self.Q = Q # terminal value function (assumes we want u^* = argmin -Q(s,a))
+        self.Q = Q # terminal value function (assumes we want u^* = argmin Q(s,a))
         self.mu = mu # controller
 
         self.B = B # batch size
         self.P = P # number of particles
         self.K = K # number of trajectory samples
         self.T = T # length of trajectories/horizon
+        self.discounting = self.gamma**torch.arange(self.T+1).view(1,-1,1)
 
         assert (self.f and self.l) or self.rollout_envs # use either (f,l) or rollout_envs to simulate rollouts
         if self.rollout_envs:
@@ -51,9 +53,10 @@ class MPPI():
         self.rollout_observation = None
         self.rollout_observations = None
         self.rollout_actions = None
+        self.value = torch.zeros(self.B, 1)
 
     @torch.no_grad()
-    def make_step(self, observation):
+    def make_step(self, observation, mode="action"):
         """return action for given observation"""
         self.observation = torch.tensor(observation, dtype=self.dtype).view(self.B, self.P, self.ns)
 
@@ -79,7 +82,7 @@ class MPPI():
 
             rollout_cost = torch.cat(rollout_costs, dim=0)
             action_cost = self.lambda_ * self.noise[b] @ self.inv_cov # (24) inner summation
-            perturbation_cost = torch.sum(self.U[b] * action_cost, dim=(1, 2)) # (24) inner summation
+            perturbation_cost = torch.sum(self.discounting * self.U[b] * action_cost, dim=(1, 2)) # (24) inner summation
 
             # repeating cost for across P particles because noise is shared
             perturbation_cost = perturbation_cost.repeat(self.P)
@@ -88,7 +91,15 @@ class MPPI():
             cost_total = rollout_cost + perturbation_cost # (24) inner sum
 
             beta = torch.min(cost_total) # "ensure that at least one trajectory has non-zero mass"
-            cost_total_non_zero = torch.exp(-self.lambda_ * (cost_total - beta)) # (24) exp
+            cost_total_non_zero = torch.exp(-(1/self.lambda_) * (cost_total - beta)) # (24) exp
+
+            if mode == 'value':
+                # negative of "free energy" as approximately max_a Q(s,a)
+                logmeanexp = torch.log(torch.mean(cost_total_non_zero)) # compute log sum exp for trajectories
+                term1 = -self.lambda_ * (-beta/self.lambda_ + logmeanexp) # energy accounting for added beta/lambda in exp
+                term2 = self.lambda_/2 * torch.sum(self.discounting * self.U[b] * (self.U[b] @ self.inv_cov), dim=(1, 2)) # mean term correction (shared among trajectories)
+                self.value[b] = -(term1 + term2) # compute F(s)
+
             eta = torch.sum(cost_total_non_zero) # (25)
             omega = (1. / eta) * cost_total_non_zero # (24) normalize for sample weights
 
@@ -98,6 +109,12 @@ class MPPI():
         action = self.U[:,0,[0]] # first action in sequence actions across batch
         return action.numpy()
     
+    @torch.no_grad()
+    def get_value(self, observation, U_init=None):
+        self.reset(U_init)
+        self.make_step(observation, mode='value')
+        return self.value, self.U
+
     def _compute_rollout_costs(self, rollout_observation):
         """compute cost/reward for K trajectories"""
         rollout_cost = torch.zeros(self.K, dtype=self.dtype)
@@ -110,7 +127,7 @@ class MPPI():
             action = self._get_perturbed_action(observation, t)
 
             next_observation, l = self._step_rollout(observation, action)
-            rollout_cost += l
+            rollout_cost += self.discounting[t] * l
 
             observation = next_observation
 
@@ -119,7 +136,7 @@ class MPPI():
 
         if self.Q is not None:
             action = self._get_perturbed_action(observation, self.T)
-            rollout_cost += -self.Q(observation, action).flatten()
+            rollout_cost += self.discounting[self.T] * -self.Q(observation, action).flatten()
 
             next_observation, _ = self._step_rollout(observation, action)
             observation = next_observation
@@ -169,7 +186,7 @@ class MPPI():
 
     def reset(self, U_init=None):
         """reinitialize all MPPI computations"""
-        self.U = U_init if U_init else self.noise_dist.sample((self.B, 1, self.T+1,))
+        self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) if U_init is None else U_init.view((self.B, 1, self.T+1, self.nu))
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
         self.observation = None
         self.rollout_observation = None
@@ -181,16 +198,16 @@ if __name__ == '__main__':
     from networks import StageCost, Dynamics
     from env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 
-    B = 3
-    P = 2
-    K = 500
+    B = 1
+    P = 1
+    K = 50
 
     env = BaseEnvWrapper(gym.make('InvertedPendulum-v5', render_mode='human'))
     ns = env.observation_space.shape[0]
     rollout_envs = gym.make_vec('InvertedPendulum-v5', num_envs=K, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper])
 
-    cov = 1*torch.diag(torch.ones(np.prod(env.action_space.shape)))
-    mppi = MPPI(env, rollout_envs=rollout_envs, K=K, T=20, B=B, P=P, cov=cov)
+    cov = 0.1*torch.diag(torch.ones(np.prod(env.action_space.shape)))
+    mppi = MPPI(env, rollout_envs=rollout_envs, K=K, T=20, B=B, P=P, cov=cov, lambda_=0.1)
 
     obs, _ = env.reset()
     env.render()
@@ -199,9 +216,10 @@ if __name__ == '__main__':
         batch = np.repeat([obs[None,:]], B, axis=0)
         belief = batch + 0.*np.random.randn(B,P,ns)
         action = mppi.make_step(belief)
+        value = mppi.get_value(belief)
             
-        obs, _, _, _, _ = env.step(action[0,0])
-        print(action)
+        obs, reward, _, _, _ = env.step(action[0,0])
+        print(reward)
         env.render()
 
     env.close()

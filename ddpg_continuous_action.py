@@ -17,6 +17,7 @@ from stable_baselines3.common.buffers import ReplayBuffer
 
 from gymppi.mppi import MPPI
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
+from gymppi.buffers import WarmstartReplayBuffer
 
 @dataclass
 class Args:
@@ -28,9 +29,9 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "mppi_targets"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -46,7 +47,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "InvertedPendulum-v5"
     """the environment id of the Atari game"""
-    total_timesteps: int = 1000000
+    total_timesteps: int = 50000
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
@@ -56,7 +57,7 @@ class Args:
     """the discount factor gamma"""
     tau: float = 0.005
     """target smoothing coefficient (default: 0.005)"""
-    batch_size: int = 256
+    batch_size: int = 32
     """the batch size of sample from the reply memory"""
     exploration_noise: float = 0.1
     """the scale of exploration noise"""
@@ -74,16 +75,22 @@ class Args:
     """use policy mean in MPPI rollouts"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
-    mppi_targets: bool = False
+    mppi_targets: bool = True
     """use MPPI for Q-function targets"""
-    horizon: int = 2
+    mppi_target_warmstart: bool = True
+    """warmstart MPPI for Q-function targets"""
+    horizon: int = 1
     """length of MPPI rollouts/trajectories"""
-    num_rollouts: int = 20
+    num_rollouts: int = 100
     """number of rollouts/trajectory samples for MPPI"""
     num_particles: int = 1
     """number of states/particles to rollout from"""
-    var: float = 0.01
+    var: float = 0.1
     """variance for noise in each action dimension"""
+    lambda_: float = 0.1
+    """temperature parameter in MPPI"""
+    vectorization_mode: str = 'sync'
+    """vectorization mode for gymnasium mppi rollouts"""
 
 
 def make_env(env_id, seed, idx, capture_video, run_name):
@@ -137,8 +144,7 @@ class Actor(nn.Module):
         return x * self.action_scale + self.action_bias
 
 
-if __name__ == "__main__":
-    args = tyro.cli(Args)
+def train(args):
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
@@ -171,7 +177,7 @@ if __name__ == "__main__":
     envs = gym.vector.SyncVectorEnv([make_env(args.env_id, args.seed, 0, args.capture_video, run_name)],
                                     autoreset_mode=gym.vector.AutoresetMode.SAME_STEP)    
     if args.mppi and args.env_in_mppi:
-        rollout_envs = gym.make_vec(args.env_id, num_envs=args.num_rollouts, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper])
+        rollout_envs = gym.make_vec(args.env_id, num_envs=args.num_rollouts, vectorization_mode=args.vectorization_mode, wrappers=[MujocoMPPIWrapper])
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     actor = Actor(envs).to(device)
@@ -189,8 +195,9 @@ if __name__ == "__main__":
         cov = args.var*torch.diag(torch.ones(np.prod(envs.single_action_space.shape), dtype=torch.float32))
 
         if args.env_in_mppi:
-            mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, Q=Q, mu=mu, cov=cov,
-                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts)
+            mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=Q, mu=mu,
+                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
+                        lambda_=args.lambda_, cov=cov)
         else:
             f = ...
             l = ...
@@ -198,15 +205,18 @@ if __name__ == "__main__":
                         B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts)
             
         if args.mppi_targets:
-            ... # make new MPPI with B=args.batch_size or let MPPI infer batch size somehow?
+            target_mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
+                               B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
+                               lambda_=args.lambda_, cov=cov)
 
     envs.single_observation_space.dtype = np.float32
-    rb = ReplayBuffer(
+    rb = WarmstartReplayBuffer(
         args.buffer_size,
         envs.single_observation_space,
         envs.single_action_space,
         device,
         handle_timeout_termination=False,
+        n_U=args.horizon+1
     )
     start_time = time.time()
 
@@ -224,9 +234,11 @@ if __name__ == "__main__":
                     actions = actor(torch.Tensor(obs).to(dtype=torch.float32).to(device))
                     actions += torch.normal(0, actor.action_scale * args.exploration_noise)
                     actions = actions.cpu().numpy().clip(envs.single_action_space.low, envs.single_action_space.high)
+                    Us = np.empty([args.num_particles, args.horizon+1] + list(envs.single_action_space.shape))
                 else:
                     # ensure obs is shape of B X P X 1 X S, assumes B=1
                     actions = mppi.make_step(obs.reshape(1, args.num_particles, 1, -1))[0]
+                    Us = mppi.U[0].cpu().numpy()
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
@@ -255,18 +267,29 @@ if __name__ == "__main__":
                 real_next_obs[idx] = infos["final_obs"][idx]
                 if args.mppi:
                     mppi.reset()
-        rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
+        rb.add(obs, real_next_obs, actions, Us, rewards, terminations, infos)
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
-            data = rb.sample(args.batch_size)
+            data, batch_inds, env_indices = rb.sample(args.batch_size)
             with torch.no_grad():
-                next_state_actions = target_actor(data.next_observations)
-                qf1_next_target = qf1_target(data.next_observations, next_state_actions)
-                next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)
+                if args.mppi and args.mppi_targets:
+                    mppi_next_observations = data.next_observations.reshape(args.batch_size, args.num_particles, 1, -1)
+                    U_init = data.Us if args.mppi_target_warmstart else None
+
+                    # target_mppi.reset(U_init)
+                    # qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations)
+                    qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init)
+
+                    rb.Us[batch_inds, env_indices, 1:] = next_Us[:,0,:-1] # copy over solution offset by 1 step
+                    next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)
+                else:
+                    next_state_actions = target_actor(data.next_observations)
+                    qf1_next_target = qf1_target(data.next_observations, next_state_actions)
+                    next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)
 
             qf1_a_values = qf1(data.observations, data.actions).view(-1)
             qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
@@ -323,3 +346,14 @@ if __name__ == "__main__":
 
     envs.close()
     writer.close()
+    wandb.finish()
+
+if __name__ == "__main__":
+    args = tyro.cli(Args)
+    for seed in range(3):
+        args.seed = seed
+        for num_rollouts in [10,20,50,100]:
+            args.num_rollouts = num_rollouts
+            for mppi_target_warmstart in [True, False]:
+                args.mppi_target_warmstart = mppi_target_warmstart
+                train(args)
