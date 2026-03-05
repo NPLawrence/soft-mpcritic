@@ -30,7 +30,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "dual_mpcritic"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -44,8 +44,8 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "InvertedPendulum-v5"
-    """the environment id of the Atari game"""
+    env_id: str = "Swimmer-v5"
+    """the environment id"""
     total_timesteps: int = 1000000
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
@@ -78,7 +78,7 @@ class Args:
     """use MPPI for Q-function targets"""
     horizon: int = 3
     """length of MPPI rollouts/trajectories"""
-    num_rollouts: int = 10
+    num_rollouts: int = 100
     """number of rollouts/trajectory samples for MPPI"""
     num_particles: int = 1
     """number of states/particles to rollout from"""
@@ -137,8 +137,8 @@ class Actor(nn.Module):
         return x * self.action_scale + self.action_bias
 
 
-if __name__ == "__main__":
-    args = tyro.cli(Args)
+def train(args):
+    # args = tyro.cli(Args)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
@@ -321,5 +321,11 @@ if __name__ == "__main__":
         #     repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
         #     push_to_hub(args, episodic_returns, repo_id, "DDPG", f"runs/{run_name}", f"videos/{run_name}-eval")
 
+    if args.track:
+        wandb.finish()
     envs.close()
     writer.close()
+
+if __name__ ==  "__main__":
+    args = Args()
+    train(args)

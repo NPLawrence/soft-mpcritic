@@ -36,7 +36,7 @@ class MPPI():
 
         self.lambda_ = lambda_ # free energy scale/parameter
         self.mean = torch.zeros(self.nu, dtype=self.dtype) if (mean is None) else mean.to(dtype=self.dtype) # mean of action noise distribution
-        self.cov = 1.0*torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of action noise distribution
+        self.cov = torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of action noise distribution
         self.inv_cov = torch.inverse(self.cov)
         self.noise_dist = MultivariateNormal(self.mean, covariance_matrix=self.cov)
 
@@ -88,7 +88,7 @@ class MPPI():
             cost_total = rollout_cost + perturbation_cost # (24) inner sum
 
             beta = torch.min(cost_total) # "ensure that at least one trajectory has non-zero mass"
-            cost_total_non_zero = torch.exp(-self.lambda_ * (cost_total - beta)) # (24) exp
+            cost_total_non_zero = torch.exp(-(1/self.lambda_) * (cost_total - beta)) # (24) exp
             eta = torch.sum(cost_total_non_zero) # (25)
             omega = (1. / eta) * cost_total_non_zero # (24) normalize for sample weights
 
