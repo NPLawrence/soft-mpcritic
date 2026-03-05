@@ -188,6 +188,7 @@ class MPPI():
         """reinitialize all MPPI computations"""
         self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) if U_init is None else U_init.view((self.B, 1, self.T+1, self.nu))
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
+        self.value = torch.zeros(self.B, 1)
         self.observation = None
         self.rollout_observation = None
         self.rollout_observations = None
