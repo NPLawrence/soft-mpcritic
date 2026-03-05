@@ -45,7 +45,7 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "Swimmer-v5"
+    env_id: str = "InvertedPendulum-v5"
     """the environment id"""
     total_timesteps: int = 1000000
     """total timesteps of the experiments"""
