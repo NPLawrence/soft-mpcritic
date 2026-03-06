@@ -29,7 +29,7 @@ class MPPI():
         self.P = P # number of particles
         self.K = K # number of trajectory samples
         self.T = T # length of trajectories/horizon
-        self.discounting = self.gamma**torch.arange(self.T+1).view(-1,1)
+        self.discounting = self.gamma**torch.arange(self.T+1)
 
         assert self.transition_model or self.rollout_envs # use either (f,l) or rollout_envs to simulate rollouts
         if self.rollout_envs:
@@ -37,7 +37,7 @@ class MPPI():
 
         self.lambda_ = lambda_ # free energy scale/parameter
         self.mean = torch.zeros(self.nu, dtype=self.dtype) if (mean is None) else mean.to(dtype=self.dtype) # mean of action noise distribution
-        self.cov = 1.0*torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of action noise distribution
+        self.cov = torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of action noise distribution
         self.inv_cov = torch.inverse(self.cov)
         self.noise_dist = MultivariateNormal(self.mean, covariance_matrix=self.cov)
 

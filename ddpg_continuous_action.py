@@ -32,7 +32,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "mppi_targets" # "transition_model"
+    wandb_project_name: str = "dual_mpcritic"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -47,8 +47,8 @@ class Args:
 
     # Algorithm specific arguments
     env_id: str = "InvertedPendulum-v5"
-    """the environment id of the Atari game"""
-    total_timesteps: int = 25000
+    """the environment id"""
+    total_timesteps: int = 1000000
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
@@ -148,6 +148,7 @@ class Actor(nn.Module):
 
 
 def train(args):
+    # args = tyro.cli(Args)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
@@ -364,6 +365,8 @@ def train(args):
         #     repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
         #     push_to_hub(args, episodic_returns, repo_id, "DDPG", f"runs/{run_name}", f"videos/{run_name}-eval")
 
+    if args.track:
+        wandb.finish()
     envs.close()
     writer.close()
     wandb.finish()
