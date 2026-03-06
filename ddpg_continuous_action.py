@@ -322,20 +322,24 @@ def train(args):
 
             if not args.env_in_mppi and (global_step % args.transition_frequency == 0):
                 pred_next_observations, pred_rewards = transition_model(data.observations, data.actions)
-                transition_loss = F.mse_loss(pred_next_observations, data.next_observations) + F.mse_loss(pred_rewards, data.rewards)
+                dynamics_loss = F.mse_loss(pred_next_observations, data.next_observations)
+                reward_loss = F.mse_loss(pred_rewards, data.rewards)
+                transition_loss = dynamics_loss + reward_loss
                 
                 # Optimize the model
                 transition_optimizer.zero_grad()
                 transition_loss.backward()
                 transition_optimizer.step()
             else:
-                transition_loss = torch.tensor([0.])
+                reward_loss = torch.tensor([0.])
+                dynamics_loss = torch.tensor([0.])
 
             if global_step % 100 == 0:
                 writer.add_scalar("losses/qf1_values", qf1_a_values.mean().item(), global_step)
                 writer.add_scalar("losses/qf1_loss", qf1_loss.item(), global_step)
                 writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
-                writer.add_scalar("losses/transition_loss", transition_loss.item(), global_step)
+                writer.add_scalar("losses/dynamics_loss", dynamics_loss.item(), global_step)
+                writer.add_scalar("losses/reward_loss", reward_loss.item(), global_step)
                 print("SPS:", int(global_step / (time.time() - start_time)))
                 writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 

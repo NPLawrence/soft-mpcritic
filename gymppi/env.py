@@ -33,15 +33,15 @@ class BaseEnvWrapper(gymnasium.Wrapper):
     def reward_bounds(self):
         """approximate bounds on the reward for all environments"""
         if 'mujoco' in self.env.unwrapped.spec.entry_point:
-            if self.env_id == 'InvertedPendulum-v5':
+            if ':InvertedPendulum' in self.env.unwrapped.spec.entry_point:
                 return {'low': 0, 'high': 1}
-            if self.env_id == 'InvertedDoublePendulum-v5':
+            if ':InvertedDoublePendulum' in self.env.unwrapped.spec.entry_point:
                 return {'low': -10, 'high': 10} # unsure on lower bound
-            if self.env_id == 'Swimmer-v5':
+            if ':Swimmer' in self.env.unwrapped.spec.entry_point:
                 return {'low': -10, 'high': 10} # unsure on both bounds
-            if self.env_id == 'Reacher-v5':
+            if ':Reacher' in self.env.unwrapped.spec.entry_point:
                 return {'low': -10, 'high': 0} # unsure on lower bound
-            if self.env_id == 'Hopper-v5':
+            if ':Hopper' in self.env.unwrapped.spec.entry_point:
                 return {'low': -10, 'high': 10} # unsure on both bounds
 
 

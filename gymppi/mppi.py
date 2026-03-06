@@ -193,7 +193,7 @@ class MPPI():
         """step the trajectory forward with the appropriate dynamics and cost models or environments"""
         if self.transition_model is not None:
             next_observations, rewards = self.transition_model(observation, action)
-            return next_observations.to(self.dtype), rewards.flatten().to(self.dtype)
+            return next_observations.to(self.dtype), -rewards.flatten().to(self.dtype)
         else:
             next_observation, rewards, terminations, truncations, infos = self.rollout_envs.step(action.numpy())
             return torch.from_numpy(next_observation).view(self.K, self.ns).to(self.dtype), -torch.from_numpy(rewards).to(self.dtype)

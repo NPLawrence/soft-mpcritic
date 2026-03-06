@@ -42,7 +42,7 @@ class JointMLP(nn.Module):
         super().__init__()
         self.nx = np.prod(env.observation_space.shape)
         self.nu = np.prod(env.action_space.shape)
-        self.reward_bounds = self.env.get_wrapper_attr('reward_bounds')
+        self.reward_bounds = env.get_wrapper_attr('reward_bounds')
         self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
         self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
 
@@ -65,7 +65,7 @@ class JointMultiMLP(nn.Module):
         super().__init__()
         self.nx = np.prod(env.observation_space.shape)
         self.nu = np.prod(env.action_space.shape)
-        self.reward_bounds = self.env.get_wrapper_attr('reward_bounds')
+        self.reward_bounds = env.get_wrapper_attr('reward_bounds')
         self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
         self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
 
