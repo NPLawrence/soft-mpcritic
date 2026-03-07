@@ -216,7 +216,6 @@ class MPPI():
 
 if __name__ == '__main__':
     import gymnasium as gym
-    from networks import StageCost, Dynamics
     from env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 
     B = 1
@@ -238,8 +237,9 @@ if __name__ == '__main__':
         belief = batch + 0.*np.random.randn(B,P,ns)
         action = mppi.make_step(belief)
         value = mppi.get_value(belief)
+        # action = env.action_space.sample().reshape([1,1,-1])
             
-        obs, reward, _, _, _ = env.step(action[0,0])
+        obs, reward, _, _, info = env.step(action[0,0])
         print(reward)
         env.render()
 

@@ -22,12 +22,16 @@ class BaseEnvWrapper(gymnasium.Wrapper):
     def _extra(self):
         """extra stuff not in observations necessary to represent the full system state"""
         if 'mujoco' in self.env.unwrapped.spec.entry_point:
-            if 'swimmer' in self.env.unwrapped.spec.entry_point:
+            if ':Swimmer' in self.env.unwrapped.spec.entry_point:
                 return {'x_position':self.env.unwrapped.data.qpos[[0]],
                         'y_position':self.env.unwrapped.data.qpos[[1]]}
-            if 'reacher' in self.env.unwrapped.spec.entry_point:
+            if ':Reacher' in self.env.unwrapped.spec.entry_point:
                 return {'goal_position':self.env.unwrapped.data.qpos[-2:],
                         'goal_velocity':self.env.unwrapped.data.qvel[-2:]}
+            if ':Hopper' in self.env.unwrapped.spec.entry_point:
+                # current velocity is clipped when getting observation
+                return {'current_position':self.env.unwrapped.data.qpos[[0]],
+                        'current_velocity':self.env.unwrapped.data.qvel}
             
     @property
     def reward_bounds(self):
@@ -36,13 +40,13 @@ class BaseEnvWrapper(gymnasium.Wrapper):
             if ':InvertedPendulum' in self.env.unwrapped.spec.entry_point:
                 return {'low': 0, 'high': 1}
             if ':InvertedDoublePendulum' in self.env.unwrapped.spec.entry_point:
-                return {'low': -10, 'high': 10} # unsure on lower bound
+                return {'low': -20, 'high': 10} # rough lower bound estimate (upper exact)
             if ':Swimmer' in self.env.unwrapped.spec.entry_point:
-                return {'low': -10, 'high': 10} # unsure on both bounds
+                return {'low': -5, 'high': 5} # very rough on both bound estimates
             if ':Reacher' in self.env.unwrapped.spec.entry_point:
-                return {'low': -10, 'high': 0} # unsure on lower bound
+                return {'low': -3, 'high': 0} # rough lower bound estimate (upper exact)
             if ':Hopper' in self.env.unwrapped.spec.entry_point:
-                return {'low': -10, 'high': 10} # unsure on both bounds
+                return {'low': -10, 'high': 10} # very rough on both bound estimates
 
 
 class ClassicMPPIWrapper(gymnasium.Wrapper):
@@ -133,6 +137,10 @@ class MujocoMPPIWrapper(gymnasium.Wrapper):
             theta2 = np.arctan2(sin_theta2, cos_theta2)
             qpos = np.concatenate([theta1, theta2, extra['goal_position']])
             qvel = np.concatenate([observation[6:8], extra['goal_velocity']])
+
+        if self.env_id == 'Hopper-v5':
+            qpos = np.concatenate([extra['current_position'], observation[:5]])
+            qvel = extra['current_velocity']
 
         return qpos, qvel
 

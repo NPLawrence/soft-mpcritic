@@ -18,7 +18,8 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from gymppi.mppi import MPPI
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from gymppi.networks import JointMLP
+from torch_utils.networks import JointMLP
+from torch_utils.trainer import Trainer
 
 @dataclass
 class Args:
@@ -92,7 +93,7 @@ class Args:
     """temperature parameter in MPPI"""
     vectorization_mode: str = 'sync'
     """vectorization mode for gymnasium mppi rollouts"""
-    transition_frequency: int = 2
+    transition_utd: int = 2
     """the frequency of training the transition model"""
 
 
@@ -208,7 +209,7 @@ def train(args):
                                 lambda_=args.lambda_, cov=cov)
         else:
             transition_model = JointMLP(env=envs.envs[0])
-            transition_optimizer = optim.Adam(list(transition_model.parameters()), lr=args.learning_rate)
+            transition_trainer = Trainer(transition_model, torch.optim.Adam, lr=args.learning_rate)
 
             mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=mu,
                         B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
@@ -237,6 +238,7 @@ def train(args):
         # ALGO LOGIC: put action logic here
         if global_step < args.learning_starts:
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
+            Us = np.empty([args.num_particles, args.horizon+1] + list(envs.single_action_space.shape))
         else:
             with torch.no_grad():
                 if not args.mppi:
@@ -281,6 +283,11 @@ def train(args):
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
 
+        if global_step == args.learning_starts and args.mppi and not args.env_in_mppi:
+            for _ in range(int(args.learning_starts*args.transition_utd)):
+                data, _, _ = rb.sample(args.batch_size)
+                dynamics_loss, reward_loss = transition_trainer.update(data)
+
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             data, batch_inds, env_indices = rb.sample(args.batch_size)
@@ -320,16 +327,12 @@ def train(args):
                 for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
                     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
 
-            if not args.env_in_mppi and (global_step % args.transition_frequency == 0):
-                pred_next_observations, pred_rewards = transition_model(data.observations, data.actions)
-                dynamics_loss = F.mse_loss(pred_next_observations, data.next_observations)
-                reward_loss = F.mse_loss(pred_rewards, data.rewards)
-                transition_loss = dynamics_loss + reward_loss
-                
-                # Optimize the model
-                transition_optimizer.zero_grad()
-                transition_loss.backward()
-                transition_optimizer.step()
+            # if not args.env_in_mppi and (global_step % args.transition_frequency == 0):
+            if args.mppi and not args.env_in_mppi:
+                dynamics_loss, reward_loss = transition_trainer.update(data)
+                for _ in range(args.transition_utd-1):
+                    data, _, _ = rb.sample(args.batch_size)
+                    dynamics_loss, reward_loss = transition_trainer.update(data)
             else:
                 reward_loss = torch.tensor([0.])
                 dynamics_loss = torch.tensor([0.])
@@ -377,14 +380,4 @@ def train(args):
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
-    # for seed in range(3):
-    #     args.seed = seed
-    #     for num_rollouts in [10,20,50,100]:
-    #         args.num_rollouts = num_rollouts
-    #         for mppi_target_warmstart in [True, False]:
-    #             args.mppi_target_warmstart = mppi_target_warmstart
-    #             train(args)
-    args.seed = 1
-    args.num_rollouts = 50
-    args.mppi_target_warmstart = True
     train(args)
