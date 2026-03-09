@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "tensorboard>=2.10.0",
-    "wandb>=0.13.11",
+    "wandb==0.25",
     "gym==0.23.1",
     "torch==2.4.1",
     "moviepy>=1.0.3",
