@@ -217,6 +217,7 @@ class MPPI():
 if __name__ == '__main__':
     import gymnasium as gym
     from env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
+    env_kwargs = {'exclude_current_positions_from_observation': False}
 
     B = 1
     P = 1

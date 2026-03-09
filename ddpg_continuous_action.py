@@ -101,13 +101,13 @@ class Args:
     """size of transition model network"""
 
 
-def make_env(env_id, seed, idx, capture_video, run_name):
+def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
     def thunk():
         if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="human")
+            env = gym.make(env_id, render_mode="human", **env_kwargs)
             # env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
-            env = gym.make(env_id)
+            env = gym.make(env_id, **env_kwargs)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = BaseEnvWrapper(env)
         env.action_space.seed(seed)
@@ -170,6 +170,12 @@ class Actor(nn.Module):
 def train(args):
     # args = tyro.cli(Args)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+
+    if any(s in args.env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Ant', 'Humanoid']):
+        env_kwargs = {'exclude_current_positions_from_observation': False}
+    else:
+        env_kwargs = {}
+
     if args.track:
         import wandb
 
@@ -198,10 +204,10 @@ def train(args):
 
     # env setup
     # see: https://farama.org/Vector-Autoreset-Mode and https://github.com/vwxyzjn/cleanrl/issues/499 for reference
-    envs = gym.vector.SyncVectorEnv([make_env(args.env_id, args.seed, 0, args.capture_video, run_name)],
+    envs = gym.vector.SyncVectorEnv([make_env(args.env_id, args.seed, 0, args.capture_video, run_name, env_kwargs)],
                                     autoreset_mode=gym.vector.AutoresetMode.SAME_STEP)    
     if args.mppi and args.env_in_mppi:
-        rollout_envs = gym.make_vec(args.env_id, num_envs=args.num_rollouts, vectorization_mode=args.vectorization_mode, wrappers=[MujocoMPPIWrapper])
+        rollout_envs = gym.make_vec(args.env_id, num_envs=args.num_rollouts, vectorization_mode=args.vectorization_mode, wrappers=[MujocoMPPIWrapper], **env_kwargs)
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     actor = Actor(envs).to(device)

@@ -125,8 +125,12 @@ class MujocoMPPIWrapper(gymnasium.Wrapper):
             qvel = observation[5:5+self.n_qvel]
 
         if self.env_id == 'Swimmer-v5':
-            qpos = np.concatenate([extra['x_position'], extra['y_position'], observation[:3]])
-            qvel = observation[3:3+self.n_qvel]
+            if self.env.unwrapped._exclude_current_positions_from_observation:
+                qpos = np.concatenate([extra['x_position'], extra['y_position'], observation[:3]])
+                qvel = observation[3:3+self.n_qvel]
+            else:
+                qpos = observation[:self.n_qpos]
+                qvel = observation[self.n_qpos:self.n_qpos+self.n_qvel]
 
         if self.env_id == 'Reacher-v5':
             cos_theta1 = observation[[0]]
@@ -139,8 +143,14 @@ class MujocoMPPIWrapper(gymnasium.Wrapper):
             qvel = np.concatenate([observation[6:8], extra['goal_velocity']])
 
         if self.env_id == 'Hopper-v5':
-            qpos = np.concatenate([extra['current_position'], observation[:5]])
-            qvel = extra['current_velocity']
+            if self.env.unwrapped._exclude_current_positions_from_observation:
+                qpos = np.concatenate([extra['current_position'], observation[:5]])
+                # current velocity is clipped when getting observation
+                qvel = extra['current_velocity']
+            else:
+                qpos = observation[:self.n_qpos]
+                # current velocity is clipped when getting observation
+                qvel = extra['current_velocity']
 
         return qpos, qvel
 
