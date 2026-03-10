@@ -18,7 +18,7 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from gymppi.mppi import MPPI
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP_sm, JointMLP_lg
+from torch_utils.networks import JointMLP_sm, JointMLP_lg, JointMLP_InvPend
 from torch_utils.trainer import Trainer
 
 @dataclass
@@ -97,8 +97,10 @@ class Args:
     """vectorization mode for gymnasium mppi rollouts"""
     transition_utd: int = 2
     """the frequency of training the transition model"""
-    network_size: str = 'small'
-    """size of transition model network"""
+    transition_network: str = 'small'
+    """size/type of transition model network"""
+    transition_batch_size: int = 32
+    """batch size for transition model updates"""
 
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
@@ -139,9 +141,13 @@ class QNetwork(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         if self.bounded:
-            x = torch.tanh(self.fc3(x))
-            return x * self.Q_scale + self.Q_bias
+            x = F.tanh(self.fc2(x))
+            x = self.fc3(x)
+            return x
+            # x = torch.tanh(self.fc3(x))
+            # return x * self.Q_scale + self.Q_bias
         else:
+            x = F.relu(self.fc2(x))
             x = self.fc3(x)
             return x
 
@@ -233,7 +239,13 @@ def train(args):
                                 B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
                                 lambda_=args.lambda_, cov=cov)
         else:
-            transition_model = JointMLP_sm(env=envs.envs[0]) if args.network_size == 'small' else JointMLP_lg(env=envs.envs[0])
+            if args.transition_network == 'small':
+                transition_model = JointMLP_sm(env=envs.envs[0])
+            elif args.transition_network == 'large':
+                transition_model = JointMLP_lg(env=envs.envs[0])
+            elif args.transition_network == 'InvertedPendulum':
+                transition_model = JointMLP_InvPend(env=envs.envs[0])
+
             transition_trainer = Trainer(transition_model, torch.optim.Adam, lr=args.learning_rate)
 
             mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=mu,
@@ -358,6 +370,9 @@ def train(args):
                 for _ in range(args.transition_utd-1):
                     data, _, _ = rb.sample(args.batch_size)
                     dynamics_loss, reward_loss = transition_trainer.update(data)
+                # for _ in range(args.transition_utd):
+                #     data, _, _ = rb.sample(args.transition_batch_size)
+                #     dynamics_loss, reward_loss = transition_trainer.update(data)
             else:
                 reward_loss = torch.tensor([0.])
                 dynamics_loss = torch.tensor([0.])
