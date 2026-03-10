@@ -33,7 +33,7 @@ class StageCost(nn.Module):
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
         y = F.relu(self.fc1(z))
-        y = F.relu(self.fc2(y))
+        y = F.tanh(self.fc2(y))
         reward = self.fc3(y)
         return reward
     

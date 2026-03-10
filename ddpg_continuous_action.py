@@ -122,7 +122,7 @@ class QNetwork(nn.Module):
     def forward(self, x, a):
         x = torch.cat([x, a], 1)
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = F.tanh(self.fc2(x))
         x = self.fc3(x)
         return x
 
