@@ -116,7 +116,7 @@ class MPPI():
                 raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
             action = self.mu(self.observation) + self.U[:,0,[0]] # first action in sequence actions across batch
         elif self.control_mode == "integrator":
-            action = self.last_action + self.U_int[:,0,[0]]
+            action = self.last_action + self.U[:,0,[0]]
         else:
             action = self.U[:,0,[0]] # first action in sequence actions across batch
         
@@ -140,7 +140,7 @@ class MPPI():
         observations = [observation]
         actions = []
 
-        action = self.last_action
+        action = self.last_action[self.b, 0].view(1, -1).repeat(self.K, 1)
         for t in range(self.T):
             residual = self._get_perturbed_action(observation, t)
             
@@ -155,7 +155,8 @@ class MPPI():
             
             # Ensure action is within bounds
             action = self._bound_action(action)
-            
+
+
             next_observation, l = self._step_rollout(observation, action)
             rollout_cost += self.discounting[t] * l
 
