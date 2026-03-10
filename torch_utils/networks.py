@@ -15,8 +15,8 @@ class Dynamics(nn.Module):
 
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
-        y = F.relu(self.fc1(z))
-        y = F.relu(self.fc2(y))
+        y = F.silu(self.fc1(z))
+        y = F.silu(self.fc2(y))
         x_next = self.fc3(y)
         return x_next
 
@@ -32,8 +32,8 @@ class StageCost(nn.Module):
 
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
-        y = F.relu(self.fc1(z))
-        y = F.tanh(self.fc2(y))
+        y = F.silu(self.fc1(z))
+        y = F.silu(self.fc2(y))
         reward = self.fc3(y)
         return reward
     
@@ -54,12 +54,12 @@ class JointMLP_sm(nn.Module):
 
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
-        y = F.relu(self.fc1(z))
-        y = F.relu(self.fc2(y))
+        y = F.silu(self.fc1(z))
+        y = F.silu(self.fc2(y))
         dx = self.fc_dx(y)
         x_next = x + dx
         z_rew = torch.cat([x, u, dx], 1)
-        y_rew = F.relu(self.fc_rew1(z_rew))
+        y_rew = F.silu(self.fc_rew1(z_rew))
         y_rew = torch.tanh(self.fc_rew2(y_rew))
         reward = self.reward_scale * y_rew + self.reward_bias
         return x_next, reward
@@ -112,12 +112,12 @@ class JointMLP_lg(nn.Module):
 
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
-        y = F.relu(self.fc1(z))
-        y = F.relu(self.fc2(y))
+        y = F.silu(self.fc1(z))
+        y = F.silu(self.fc2(y))
         dx = self.fc_dx(y)
         x_next = x + dx
         z_rew = torch.cat([x, u, dx], 1)
-        y_rew = F.relu(self.fc_rew1(z_rew))
+        y_rew = F.silu(self.fc_rew1(z_rew))
         y_rew = torch.tanh(self.fc_rew2(y_rew))
         reward = self.reward_scale * y_rew + self.reward_bias
         return x_next, reward
