@@ -9,7 +9,7 @@ from torch.distributions import MultivariateNormal
 
 
 class MPPI():
-    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, P=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None):
+    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, P=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, integral=False):
         self.env = env
         self.rollout_envs = rollout_envs
         self.env_dtype = self.env.observation_space.dtype
@@ -22,6 +22,7 @@ class MPPI():
 
         self.gamma = gamma
         self.transition_model = transition_model # model of p(s',r|s,a)
+        self.integral = integral # whether to optimize open-loop U or \delta U from previous U sequence
         self.Q = Q # terminal value function (goal is to minimize u^* = argmin -Q(s,a))
         self.mu = mu # controller
 
@@ -49,6 +50,7 @@ class MPPI():
         self.info = None
 
         # sampled results from last command
+        self.U_int = self.u_init * torch.ones_like(self.U) # integral action where each element is u_t = u_t-1 + \delta_t (index i corresponds to t=i-1)
         self.rollout_observation = None
         self.rollout_observations = None
         self.rollout_actions = None
@@ -107,6 +109,9 @@ class MPPI():
 
         if self.mu:
             action = self.mu(self.observation) + self.U[:,0,[0]] # first action in sequence actions across batch
+        elif self.integral:
+            self.U_int = self.U_int + self.U # u_t = u_t-1 + delta_t
+            action = self.U_int[:,0,[0]]
         else:
             action = self.U[:,0,[0]] # first action in sequence actions across batch
         
@@ -134,6 +139,8 @@ class MPPI():
             
             if self.mu:
                 action = self.mu(observation) + residual
+            elif self.integral:
+                action = self.U_int[self.b, self.p, [t]] + residual
             else:
                 action = residual
             
@@ -153,6 +160,8 @@ class MPPI():
             
             if self.mu:
                 action = self.mu(observation) + residual
+            elif self.integral:
+                action = self.U_int[self.b, self.p, [self.T]] + residual
             else:
                 action = residual
             
@@ -207,6 +216,7 @@ class MPPI():
     def reset(self, U_init=None):
         """reinitialize all MPPI computations"""
         self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) if U_init is None else U_init.view((self.B, 1, self.T+1, self.nu))
+        self.U_int = torch.zeros_like(self.U)
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
         self.value = torch.zeros(self.B, 1)
         self.observation = None

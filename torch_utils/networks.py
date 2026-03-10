@@ -36,7 +36,26 @@ class StageCost(nn.Module):
         y = F.silu(self.fc2(y))
         reward = self.fc3(y)
         return reward
-    
+
+class JointMLP_InvPend(nn.Module):
+    def __init__(self, env):
+        super().__init__()
+        self.nx = np.prod(env.observation_space.shape)
+        self.nu = np.prod(env.action_space.shape)
+
+        self.fc1 = nn.Linear(self.nx + self.nu, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, self.nx)
+
+    def forward(self, x, u):
+        z = torch.cat([x, u], 1)
+        y = F.relu(self.fc1(z))
+        y = F.relu(self.fc2(y))
+        x_next = self.fc3(y)
+        with torch.no_grad():
+            reward = (torch.abs(x_next[...,1]) <= 0.2).float()
+        return x_next, reward
+
 class JointMLP_sm(nn.Module):
     def __init__(self, env):
         super().__init__()
@@ -131,13 +150,13 @@ class JointMultiMLP_lg(nn.Module):
         self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
         self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
 
-        self.fc1_dyn = nn.Linear(self.nx + self.nu, 64)
-        self.fc2_dyn = nn.Linear(64, 64)
-        self.fc3_dyn = nn.Linear(64, self.nx)
+        self.fc1_dyn = nn.Linear(self.nx + self.nu, 256)
+        self.fc2_dyn = nn.Linear(256, 256)
+        self.fc3_dyn = nn.Linear(256, self.nx)
 
-        self.fc1_rew = nn.Linear(2*self.nx + self.nu, 64)
-        self.fc2_rew = nn.Linear(64, 64)
-        self.fc3_rew = nn.Linear(64, 1)
+        self.fc1_rew = nn.Linear(2*self.nx + self.nu, 256)
+        self.fc2_rew = nn.Linear(256, 256)
+        self.fc3_rew = nn.Linear(256, 1)
 
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
