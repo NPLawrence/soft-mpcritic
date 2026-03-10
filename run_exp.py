@@ -3,7 +3,7 @@ from ddpg_continuous_action import Args, train
 if __name__ == "__main__":
     args = Args()
     args.wandb_project_name = "dual_mpcritic_ddpg_full"
-    args.env_id = "InvertedPendulum-v5"
+    # args.env_id = "InvertedPendulum-v5"
     args.track = True
     args.save_model = True
     args.total_timesteps = 100000
@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
 for env in ['InvertedPendulum-v5', 'Hopper-v5']:
     if env == 'InvertedPendulum-v5':
-        args.total_timesteps = 100000
+        args.total_timesteps = 50000
     elif env == 'Hopper-v5':
         args.total_timesteps = 500000
     args.env_id = env
@@ -33,8 +33,9 @@ for env in ['InvertedPendulum-v5', 'Hopper-v5']:
                         if mppi:
                             for horizon in [1,3]:
                                 args.horizon = horizon
-                                for mu_in_mppi in [True, False]:
-                                    args.mu_in_mppi = mu_in_mppi
+                                for control_mode in ["mu", "integrator", "default"]:
+                                    args.mppi_control_mode = control_mode
                                     run_name = train(args)
                         else:
+                            args.horizon = 0
                             run_name = train(args)

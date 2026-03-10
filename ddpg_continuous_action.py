@@ -72,8 +72,8 @@ class Args:
     """use MPPI online (making extra envs)"""
     env_in_mppi: bool = True
     """use the environment for MPPI rollouts"""
-    mu_in_mppi: bool = False
-    """use policy mean in MPPI rollouts"""
+    mppi_control_mode: str = "default"
+    """MPPI control mode: one of {'default','mu','integrator'}"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
     mppi_targets: bool = True
@@ -212,16 +212,17 @@ def train(args):
 
     if args.mppi:
         Q = qf1 if args.Q_in_mppi else None
-        mu = actor if args.mu_in_mppi else None
+        if args.mppi_control_mode not in {"default", "mu", "integrator"}:
+            raise ValueError(f"Invalid mppi_control_mode={args.mppi_control_mode}. Expected one of 'default', 'mu', 'integrator'.")
         cov = args.var*torch.diag(torch.ones(np.prod(envs.single_action_space.shape), dtype=torch.float32))
 
         if args.env_in_mppi:
-            mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=Q, mu=mu,
-                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
+            mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=Q, mu=actor,
+                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
                         lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
+                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
                                 lambda_=args.lambda_, cov=cov)
         else:
             if args.transition_network == 'small':
@@ -240,12 +241,12 @@ def train(args):
                 huber_delta=args.huber_delta,
             )
 
-            mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=mu,
-                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
+            mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
+                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
                         lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
+                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
                                 lambda_=args.lambda_, cov=cov)
 
     rb = WarmstartReplayBuffer(

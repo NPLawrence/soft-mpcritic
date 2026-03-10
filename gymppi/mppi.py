@@ -9,7 +9,7 @@ from torch.distributions import MultivariateNormal
 
 
 class MPPI():
-    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, P=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, integral=False):
+    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, P=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, control_mode="default"):
         self.env = env
         self.rollout_envs = rollout_envs
         self.env_dtype = self.env.observation_space.dtype
@@ -22,9 +22,13 @@ class MPPI():
 
         self.gamma = gamma
         self.transition_model = transition_model # model of p(s',r|s,a)
-        self.integral = integral # whether to optimize open-loop U or \delta U from previous U sequence
         self.Q = Q # terminal value function (goal is to minimize u^* = argmin -Q(s,a))
-        self.mu = mu # controller
+        self.mu = mu # controller (used only when control_mode == "mu")
+
+        self.control_mode = control_mode
+
+        if self.control_mode not in {"default", "mu", "integrator"}:
+            raise ValueError(f"Invalid control_mode={self.control_mode}. Expected one of 'default', 'mu', 'integrator'.")
 
         self.B = B # batch size
         self.P = P # number of particles
@@ -107,9 +111,11 @@ class MPPI():
             perturbations = torch.sum(omega.view(-1, 1, 1) * rep_noise, dim=0) # (26) summation
             self.U[b] = self.U[b] + perturbations # (26)
 
-        if self.mu:
+        if self.control_mode == "mu":
+            if self.mu is None:
+                raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
             action = self.mu(self.observation) + self.U[:,0,[0]] # first action in sequence actions across batch
-        elif self.integral:
+        elif self.control_mode == "integrator":
             self.U_int = self.U_int + self.U # u_t = u_t-1 + delta_t
             action = self.U_int[:,0,[0]]
         else:
@@ -137,9 +143,11 @@ class MPPI():
         for t in range(self.T):
             residual = self._get_perturbed_action(observation, t)
             
-            if self.mu:
+            if self.control_mode == "mu":
+                if self.mu is None:
+                    raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
                 action = self.mu(observation) + residual
-            elif self.integral:
+            elif self.control_mode == "integrator":
                 action = self.U_int[self.b, self.p, [t]] + residual
             else:
                 action = residual
@@ -158,9 +166,11 @@ class MPPI():
         if self.Q is not None:
             residual = self._get_perturbed_action(observation, self.T)
             
-            if self.mu:
+            if self.control_mode == "mu":
+                if self.mu is None:
+                    raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
                 action = self.mu(observation) + residual
-            elif self.integral:
+            elif self.control_mode == "integrator":
                 action = self.U_int[self.b, self.p, [self.T]] + residual
             else:
                 action = residual
