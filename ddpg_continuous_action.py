@@ -18,7 +18,7 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from gymppi.mppi import MPPI
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP
+from torch_utils.networks import JointMLP_sm, JointMLP_lg
 from torch_utils.trainer import Trainer
 
 @dataclass
@@ -67,6 +67,8 @@ class Args:
     """timestep to start learning"""
     policy_frequency: int = 2
     """the frequency of training policy (delayed)"""
+    bounded_Q: bool = False
+    """whether to use a bounded Q-network"""
 
     # MPPI arguments
     mppi: bool = True
@@ -95,15 +97,17 @@ class Args:
     """vectorization mode for gymnasium mppi rollouts"""
     transition_utd: int = 2
     """the frequency of training the transition model"""
+    network_size: str = 'small'
+    """size of transition model network"""
 
 
-def make_env(env_id, seed, idx, capture_video, run_name):
+def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
     def thunk():
         if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="human")
+            env = gym.make(env_id, render_mode="human", **env_kwargs)
             # env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
-            env = gym.make(env_id)
+            env = gym.make(env_id, **env_kwargs)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = BaseEnvWrapper(env)
         env.action_space.seed(seed)
@@ -113,18 +117,33 @@ def make_env(env_id, seed, idx, capture_video, run_name):
 
 # ALGO LOGIC: initialize agent here:
 class QNetwork(nn.Module):
-    def __init__(self, env):
+    def __init__(self, env, gamma=None, bounded=False):
         super().__init__()
         self.fc1 = nn.Linear(np.array(env.single_observation_space.shape).prod() + np.prod(env.single_action_space.shape), 256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, 1)
+        self.bounded = bounded
+        if self.bounded:
+            self.reward_bounds = env.envs[0].get_wrapper_attr('reward_bounds')
+            self.Q_high = self.reward_bounds['high'] / (1 - gamma)
+            self.Q_low = self.reward_bounds['low'] / (1 - gamma)
+            self.register_buffer(
+                "Q_scale", torch.tensor((self.Q_high - self.Q_low) / 2.0, dtype=torch.float32)
+            )
+            self.register_buffer(
+                "Q_bias", torch.tensor((self.Q_high + self.Q_low) / 2.0, dtype=torch.float32)
+            )
 
     def forward(self, x, a):
         x = torch.cat([x, a], 1)
         x = F.relu(self.fc1(x))
-        x = F.tanh(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        x = F.relu(self.fc2(x))
+        if self.bounded:
+            x = torch.tanh(self.fc3(x))
+            return x * self.Q_scale + self.Q_bias
+        else:
+            x = self.fc3(x)
+            return x
 
 
 class Actor(nn.Module):
@@ -151,6 +170,12 @@ class Actor(nn.Module):
 def train(args):
     # args = tyro.cli(Args)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+
+    if any(s in args.env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Ant', 'Humanoid']):
+        env_kwargs = {'exclude_current_positions_from_observation': False}
+    else:
+        env_kwargs = {}
+
     if args.track:
         import wandb
 
@@ -179,15 +204,15 @@ def train(args):
 
     # env setup
     # see: https://farama.org/Vector-Autoreset-Mode and https://github.com/vwxyzjn/cleanrl/issues/499 for reference
-    envs = gym.vector.SyncVectorEnv([make_env(args.env_id, args.seed, 0, args.capture_video, run_name)],
+    envs = gym.vector.SyncVectorEnv([make_env(args.env_id, args.seed, 0, args.capture_video, run_name, env_kwargs)],
                                     autoreset_mode=gym.vector.AutoresetMode.SAME_STEP)    
     if args.mppi and args.env_in_mppi:
-        rollout_envs = gym.make_vec(args.env_id, num_envs=args.num_rollouts, vectorization_mode=args.vectorization_mode, wrappers=[MujocoMPPIWrapper])
+        rollout_envs = gym.make_vec(args.env_id, num_envs=args.num_rollouts, vectorization_mode=args.vectorization_mode, wrappers=[MujocoMPPIWrapper], **env_kwargs)
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     actor = Actor(envs).to(device)
-    qf1 = QNetwork(envs).to(device)
-    qf1_target = QNetwork(envs).to(device)
+    qf1 = QNetwork(envs, args.gamma, bounded=args.bounded_Q).to(device)
+    qf1_target = QNetwork(envs, args.gamma, bounded=args.bounded_Q).to(device)
     target_actor = Actor(envs).to(device)
     target_actor.load_state_dict(actor.state_dict())
     qf1_target.load_state_dict(qf1.state_dict())
@@ -208,7 +233,7 @@ def train(args):
                                 B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
                                 lambda_=args.lambda_, cov=cov)
         else:
-            transition_model = JointMLP(env=envs.envs[0])
+            transition_model = JointMLP_sm(env=envs.envs[0]) if args.network_size == 'small' else JointMLP_lg(env=envs.envs[0])
             transition_trainer = Trainer(transition_model, torch.optim.Adam, lr=args.learning_rate)
 
             mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=mu,

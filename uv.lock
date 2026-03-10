@@ -286,7 +286,7 @@ requires-dist = [
     { name = "tensorboard", specifier = ">=2.10.0" },
     { name = "torch", specifier = "==2.4.1" },
     { name = "tyro", specifier = ">=0.5.10" },
-    { name = "wandb", specifier = ">=0.13.11" },
+    { name = "wandb", specifier = "==0.25" },
 ]
 
 [[package]]
