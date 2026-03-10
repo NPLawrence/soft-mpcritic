@@ -17,7 +17,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from gymppi.mppi import MPPI
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP_sm, JointMLP_lg, JointMLP_InvPend
+from torch_utils.networks import JointMLP_small, JointMLP_delta, JointMLP_InvPend
 from torch_utils.trainer import Trainer
 
 @dataclass
@@ -226,11 +226,12 @@ def train(args):
                                 lambda_=args.lambda_, cov=cov)
         else:
             if args.transition_network == 'small':
-                transition_model = JointMLP_sm(env=envs.envs[0])
-            elif args.transition_network == 'large':
-                transition_model = JointMLP_lg(env=envs.envs[0])
+                transition_model = JointMLP_small(env=envs.envs[0])
             elif args.transition_network == 'InvertedPendulum':
                 transition_model = JointMLP_InvPend(env=envs.envs[0])
+            else:
+                assert args.model_predict_delta
+                transition_model = JointMLP_delta(env=envs.envs[0])
                 
             transition_trainer = Trainer(
                 transition_model,
