@@ -1,16 +1,40 @@
+import torch
 import torch.nn as nn
 from torch.optim import Adam
 
 class Trainer():
-    def __init__(self, model, optimizer_class=Adam, lr=3e-4, model_loss=nn.MSELoss()):
+    def __init__(
+        self,
+        model,
+        optimizer_class=Adam,
+        lr=3e-4,
+        model_loss=None,
+        predict_delta=True,
+        huber_delta=1.0,
+    ):
         self.model = model
-        self.model_loss = model_loss
+        self.model_loss = nn.SmoothL1Loss(beta=huber_delta) if model_loss is None else model_loss
         self.model_optimizer = optimizer_class(list(self.model.parameters()), lr=lr)
+        self.predict_delta = predict_delta
 
     def update(self, data):
-        pred_next_observations, pred_rewards = self.model(data.observations, data.actions)
-        dynamics_loss = self.model_loss(pred_next_observations, data.next_observations)
-        reward_loss = self.model_loss(pred_rewards, data.rewards)
+        device = next(self.model.parameters()).device
+        observations = data.observations.to(device=device, dtype=torch.float32)
+        actions = data.actions.to(device=device, dtype=torch.float32)
+        next_observations = data.next_observations.to(device=device, dtype=torch.float32)
+        rewards = data.rewards.to(device=device, dtype=torch.float32)
+
+        pred_next_observations, pred_rewards = self.model(observations, actions)
+
+        if self.predict_delta:
+            pred_dynamics = pred_next_observations - observations
+            target_dynamics = next_observations - observations
+        else:
+            pred_dynamics = pred_next_observations
+            target_dynamics = next_observations
+
+        dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
+        reward_loss = self.model_loss(pred_rewards, rewards)
         loss = dynamics_loss + reward_loss
         
         # Optimize the model

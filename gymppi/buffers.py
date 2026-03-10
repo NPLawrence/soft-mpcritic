@@ -121,7 +121,7 @@ class WarmstartReplayBuffer(BaseBuffer):
         U: np.ndarray,
         reward: np.ndarray,
         done: np.ndarray,
-        infos: list[dict[str, Any]],
+        infos: Any,
     ) -> None:
         # Reshape needed when using multiple envs with discrete observations
         # as numpy cannot broadcast (n_discrete,) to (n_discrete, 1)
@@ -186,14 +186,14 @@ class WarmstartReplayBuffer(BaseBuffer):
             next_obs = self._normalize_obs(self.next_observations[batch_inds, env_indices, :], env)
 
         data = (
-            self._normalize_obs(self.observations[batch_inds, env_indices, :], env),
-            self.actions[batch_inds, env_indices, :],
-            self.Us[batch_inds, env_indices, :, :],
-            next_obs,
+            self._normalize_obs(self.observations[batch_inds, env_indices, :], env).astype(np.float32),
+            self.actions[batch_inds, env_indices, :].astype(np.float32),
+            self.Us[batch_inds, env_indices, :, :].astype(np.float32),
+            next_obs.astype(np.float32),
             # Only use dones that are not due to timeouts
             # deactivated by default (timeouts is initialized as an array of False)
-            (self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(-1, 1),
-            self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env),
+            (self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(-1, 1).astype(np.float32),
+            self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env).astype(np.float32),
         )
         return WarmstartReplayBufferSamples(*tuple(map(self.to_torch, data))), batch_inds, env_indices
 

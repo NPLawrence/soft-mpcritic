@@ -3,17 +3,16 @@ import os
 import random
 import time
 from dataclasses import dataclass
+from typing import Any, Optional, cast
 
 import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
+from torch.optim.adam import Adam
 import tyro
-from torch.utils.tensorboard import SummaryWriter
-
-from stable_baselines3.common.buffers import ReplayBuffer
+from torch.utils.tensorboard.writer import SummaryWriter
 
 from gymppi.mppi import MPPI
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
@@ -35,7 +34,7 @@ class Args:
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "dual_mpcritic"
     """the wandb's project name"""
-    wandb_entity: str = None
+    wandb_entity: Optional[str] = None
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
@@ -67,8 +66,6 @@ class Args:
     """timestep to start learning"""
     policy_frequency: int = 2
     """the frequency of training policy (delayed)"""
-    bounded_Q: bool = False
-    """whether to use a bounded Q-network"""
 
     # MPPI arguments
     mppi: bool = True
@@ -99,6 +96,12 @@ class Args:
     """the frequency of training the transition model"""
     network_size: str = 'small'
     """size of transition model network"""
+    model_predict_delta: bool = True
+    """train transition model on state deltas (next_obs - obs)"""
+    use_huber_loss: bool = True
+    """if True use Huber (SmoothL1) universally, else use MSE universally"""
+    huber_delta: float = 1.0
+    """SmoothL1 (Huber) transition point for both model/reward and Q losses"""
 
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
@@ -117,33 +120,18 @@ def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
 
 # ALGO LOGIC: initialize agent here:
 class QNetwork(nn.Module):
-    def __init__(self, env, gamma=None, bounded=False):
+    def __init__(self, env):
         super().__init__()
         self.fc1 = nn.Linear(np.array(env.single_observation_space.shape).prod() + np.prod(env.single_action_space.shape), 256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, 1)
-        self.bounded = bounded
-        if self.bounded:
-            self.reward_bounds = env.envs[0].get_wrapper_attr('reward_bounds')
-            self.Q_high = self.reward_bounds['high'] / (1 - gamma)
-            self.Q_low = self.reward_bounds['low'] / (1 - gamma)
-            self.register_buffer(
-                "Q_scale", torch.tensor((self.Q_high - self.Q_low) / 2.0, dtype=torch.float32)
-            )
-            self.register_buffer(
-                "Q_bias", torch.tensor((self.Q_high + self.Q_low) / 2.0, dtype=torch.float32)
-            )
 
     def forward(self, x, a):
         x = torch.cat([x, a], 1)
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        if self.bounded:
-            x = torch.tanh(self.fc3(x))
-            return x * self.Q_scale + self.Q_bias
-        else:
-            x = self.fc3(x)
-            return x
+        x = F.tanh(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
 
 class Actor(nn.Module):
@@ -211,13 +199,14 @@ def train(args):
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     actor = Actor(envs).to(device)
-    qf1 = QNetwork(envs, args.gamma, bounded=args.bounded_Q).to(device)
-    qf1_target = QNetwork(envs, args.gamma, bounded=args.bounded_Q).to(device)
+    qf1 = QNetwork(envs).to(device)
+    qf1_target = QNetwork(envs).to(device)
+    model_loss = nn.SmoothL1Loss(beta=args.huber_delta) if args.use_huber_loss else nn.MSELoss()
     target_actor = Actor(envs).to(device)
     target_actor.load_state_dict(actor.state_dict())
     qf1_target.load_state_dict(qf1.state_dict())
-    q_optimizer = optim.Adam(list(qf1.parameters()), lr=args.learning_rate)
-    actor_optimizer = optim.Adam(list(actor.parameters()), lr=args.learning_rate)
+    q_optimizer = Adam(list(qf1.parameters()), lr=args.learning_rate)
+    actor_optimizer = Adam(list(actor.parameters()), lr=args.learning_rate)
 
     if args.mppi:
         Q = qf1 if args.Q_in_mppi else None
@@ -234,7 +223,14 @@ def train(args):
                                 lambda_=args.lambda_, cov=cov)
         else:
             transition_model = JointMLP_sm(env=envs.envs[0]) if args.network_size == 'small' else JointMLP_lg(env=envs.envs[0])
-            transition_trainer = Trainer(transition_model, torch.optim.Adam, lr=args.learning_rate)
+            transition_trainer = Trainer(
+                transition_model,
+                Adam,
+                lr=args.learning_rate,
+                model_loss=model_loss,
+                predict_delta=args.model_predict_delta,
+                huber_delta=args.huber_delta,
+            )
 
             mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=mu,
                         B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
@@ -244,7 +240,6 @@ def train(args):
                                 B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts,
                                 lambda_=args.lambda_, cov=cov)
 
-    envs.single_observation_space.dtype = np.float32
     rb = WarmstartReplayBuffer(
         args.buffer_size,
         envs.single_observation_space,
@@ -333,7 +328,10 @@ def train(args):
                     next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)
 
             qf1_a_values = qf1(data.observations, data.actions).view(-1)
-            qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
+            if args.use_huber_loss:
+                qf1_loss = F.smooth_l1_loss(qf1_a_values, next_q_value, beta=args.huber_delta)
+            else:
+                qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
 
             # optimize the model
             q_optimizer.zero_grad()
