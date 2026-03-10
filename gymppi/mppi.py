@@ -54,7 +54,7 @@ class MPPI():
         self.info = None
 
         # sampled results from last command
-        self.U_int = self.u_init * torch.ones_like(self.U) # integral action where each element is u_t = u_t-1 + \delta_t (index i corresponds to t=i-1)
+        self.last_action = self.u_init * torch.ones_like(self.U[:,:,0]) # integral action where each element is u_t = u_t-1 + \delta_t (index i corresponds to t=i-1)
         self.rollout_observation = None
         self.rollout_observations = None
         self.rollout_actions = None
@@ -116,13 +116,13 @@ class MPPI():
                 raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
             action = self.mu(self.observation) + self.U[:,0,[0]] # first action in sequence actions across batch
         elif self.control_mode == "integrator":
-            self.U_int = self.U_int + self.U # u_t = u_t-1 + delta_t
-            action = self.U_int[:,0,[0]]
+            action = self.last_action + self.U_int[:,0,[0]]
         else:
             action = self.U[:,0,[0]] # first action in sequence actions across batch
         
         # Ensure action is within bounds
         action = self._bound_action(action)
+        self.last_action = action
         
         return action.numpy()
     
@@ -140,6 +140,7 @@ class MPPI():
         observations = [observation]
         actions = []
 
+        action = self.last_action
         for t in range(self.T):
             residual = self._get_perturbed_action(observation, t)
             
@@ -148,7 +149,7 @@ class MPPI():
                     raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
                 action = self.mu(observation) + residual
             elif self.control_mode == "integrator":
-                action = self.U_int[self.b, self.p, [t]] + residual
+                action = action + residual
             else:
                 action = residual
             
@@ -171,7 +172,7 @@ class MPPI():
                     raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
                 action = self.mu(observation) + residual
             elif self.control_mode == "integrator":
-                action = self.U_int[self.b, self.p, [self.T]] + residual
+                action = action + residual
             else:
                 action = residual
             
@@ -226,7 +227,7 @@ class MPPI():
     def reset(self, U_init=None):
         """reinitialize all MPPI computations"""
         self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) if U_init is None else U_init.view((self.B, 1, self.T+1, self.nu))
-        self.U_int = torch.zeros_like(self.U)
+        self.last_action = self.u_init * torch.ones_like(self.U[:,:,0])
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
         self.value = torch.zeros(self.B, 1)
         self.observation = None
@@ -257,7 +258,7 @@ if __name__ == '__main__':
         batch = np.repeat([obs[None,:]], B, axis=0)
         belief = batch + 0.*np.random.randn(B,P,ns)
         action = mppi.make_step(belief)
-        value = mppi.get_value(belief)
+        # value = mppi.get_value(belief)
         # action = env.action_space.sample().reshape([1,1,-1])
             
         obs, reward, _, _, info = env.step(action[0,0])
