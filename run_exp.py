@@ -2,7 +2,7 @@ from ddpg_continuous_action import Args, train
 
 if __name__ == "__main__":
     args = Args()
-    args.wandb_project_name = "dual_mpcritic_ddpg_full"
+    args.wandb_project_name = "dual_mpcritic_ddpg_redo_rewardmodel_full"
     # args.env_id = "InvertedPendulum-v5"
     args.track = True
     args.save_model = True
@@ -10,7 +10,7 @@ if __name__ == "__main__":
     # args.var = 1.0
     args.mppi_targets = False
     args.env_in_mppi = False
-    args.num_rollouts = 300
+    args.num_rollouts = 200
     # args.batch_size = 32
     # args.transition_network = "JointMLP_delta"
 
@@ -27,14 +27,14 @@ for env in ['InvertedPendulum-v5', 'Hopper-v5']:
             args.var = 0.1*multiplier
             for seed in range(5):
                 args.seed = seed
-                for use_huber in [True, False]:
+                for use_huber in [False,True]:
                     args.use_huber_loss = use_huber
-                    for mppi in [True, False]:
+                    for mppi in [True]:
                         args.mppi = mppi
                         if mppi:
-                            for horizon in [1,3]:
+                            for horizon in [1]:
                                 args.horizon = horizon
-                                for control_mode in ["integrator", "mu", "default"]:
+                                for control_mode in ["mu", "default"]:
                                     args.mppi_control_mode = control_mode
                                     run_name = train(args)
                         else:

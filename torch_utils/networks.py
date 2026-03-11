@@ -67,19 +67,16 @@ class JointMLP_small(nn.Module):
 
         self.fc1 = nn.Linear(self.nx + self.nu, 64)
         self.fc2 = nn.Linear(64, 64)
-        self.fc_dx = nn.Linear(64, self.nx)
-        self.fc_rew1 = nn.Linear(2 * self.nx + self.nu, 64)
-        self.fc_rew2 = nn.Linear(64, 1)
+        self.fc3 = nn.Linear(64, self.nx + 1)
 
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
         y = F.silu(self.fc1(z))
         y = F.silu(self.fc2(y))
-        dx = self.fc_dx(y)
+        y = self.fc3(y)
+        dx = y[...,:self.nx]
         x_next = x + dx
-        z_rew = torch.cat([x, u, dx], 1)
-        y_rew = F.silu(self.fc_rew1(z_rew))
-        y_rew = torch.tanh(self.fc_rew2(y_rew))
+        y_rew = F.tanh(y[...,self.nx:])
         reward = self.reward_scale * y_rew + self.reward_bias
         return x_next, reward
     

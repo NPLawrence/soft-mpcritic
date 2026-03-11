@@ -104,6 +104,8 @@ class Args:
     """if True use Huber (SmoothL1) universally, else use MSE universally"""
     huber_delta: float = 1.0
     """SmoothL1 (Huber) transition point for both model/reward and Q losses"""
+    value_aligned_model_loss: bool = False
+    """if True, use value function to formulate cross-entropy model loss---otherwise use simple regression via `use_huber_loss`"""
 
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
