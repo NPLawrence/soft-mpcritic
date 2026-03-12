@@ -67,36 +67,26 @@ class Trainer_ValueAligned():
         observations = data.observations.to(device=device, dtype=torch.float32)
         next_observations = data.next_observations.to(device=device, dtype=torch.float32)
         actions = data.actions.to(device=device, dtype=torch.float32)
-        rewards = data.rewards.to(device=device, dtype=torch.float32)
+        # dones = data.dones.to(device=device, dtype=torch.float32)
 
-        # compute value-aligned model loss
-        obs = observations
-        a = actions
-        # rollout_cost = torch.zeros_like(rewards)
-        for t in range(1):
-            if t > 0: # add back if using 1-step bellman target
-                a = self.mu(obs)
-            obs, rew = self.transition_model(obs, a)
-            # rollout_cost += (self.gamma ** t) * rew
+        pred_next_observations, _ = self.transition_model(observations, actions)
+        model_value = self.Q(pred_next_observations, self.mu(pred_next_observations))
+        target_value = self.Q(next_observations, self.mu(next_observations)).detach()
 
-        # rollout_cost += (self.gamma ** self.T) * self.Q(obs, self.mu(obs))
-        rollout_cost = self.Q(obs, self.mu(obs))
-
-        # bellman_target = rewards + self.gamma*self.Q(next_observations, self.mu(next_observations)).detach()
-        # bellman_target = self.Q(observations, self.mu(observations)).detach()
-        bellman_target = self.Q(next_observations, self.mu(next_observations)).detach()
         if self.temp_model_loss == "bce_exp":
-            target_q_prob = torch.exp(-bellman_target).detach()
-            model_q_prob = torch.exp(-rollout_cost)
+            target_q_prob = torch.exp(-target_value)
+            model_q_prob = torch.exp(-model_value)
             dynamics_loss = torch.nn.functional.binary_cross_entropy(model_q_prob, target_q_prob)
         elif self.temp_model_loss == "mse":
-            target_q_prob = bellman_target.detach()
-            model_q_prob = rollout_cost
+            target_q_prob = target_value
+            model_q_prob = model_value
             dynamics_loss = torch.nn.functional.mse_loss(model_q_prob, target_q_prob)
         elif self.temp_model_loss == "vaml":
-            target_q_prob = bellman_target.detach()
-            model_q_prob = rollout_cost
+            target_q_prob = target_value
+            model_q_prob = model_value
             dynamics_loss = torch.nn.functional.mse_loss(model_q_prob, target_q_prob)
+        else:
+            raise ValueError(f"Unknown temp_model_loss={self.temp_model_loss}. Expected one of 'bce_exp', 'mse', 'vaml'.")
 
         loss = dynamics_loss
 

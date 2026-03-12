@@ -231,8 +231,8 @@ def train(args):
             if args.value_aligned_model_loss:
                 transition_trainer = Trainer_ValueAligned(
                     model=transition_model,
-                    actor=actor,
-                    critic=qf1,
+                    actor=target_actor,
+                    critic=qf1_target,
                     gamma=args.gamma,
                     T=args.horizon,
                     optimizer_class=Adam,
