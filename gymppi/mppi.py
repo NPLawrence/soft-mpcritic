@@ -27,8 +27,8 @@ class MPPI():
 
         self.control_mode = control_mode
 
-        if self.control_mode not in {"default", "mu", "integrator"}:
-            raise ValueError(f"Invalid control_mode={self.control_mode}. Expected one of 'default', 'mu', 'integrator'.")
+        if self.control_mode not in {"default", "mu", "integrator", "traj_integrator"}:
+            raise ValueError(f"Invalid control_mode={self.control_mode}. Expected one of 'default', 'mu', 'integrator', 'traj_integrator'.")
 
         self.B = B # batch size
         self.P = P # number of particles
@@ -54,7 +54,8 @@ class MPPI():
         self.info = None
 
         # sampled results from last command
-        self.last_action = self.u_init * torch.ones_like(self.U[:,:,0]) # integral action where each element is u_t = u_t-1 + \delta_t (index i corresponds to t=i-1)
+        self.last_U = self.u_init * torch.ones_like(self.U) # integral trajectory w.r.t. "environment time" where each element is u_t = u_t-1 + \delta_t (index i corresponds to t=i-1)
+        self.last_action = self.u_init * torch.ones_like(self.U[:,:,0]) # initial action for integral action w.r.t. "horizon time" where each subsequent element is u_k = u_k-1 + \delta_k (index i corresponds to k=i-1)
         self.rollout_observation = None
         self.rollout_observations = None
         self.rollout_actions = None
@@ -117,6 +118,9 @@ class MPPI():
             action = self.mu(self.observation) + self.U[:,0,[0]] # first action in sequence actions across batch
         elif self.control_mode == "integrator":
             action = self.last_action + self.U[:,0,[0]]
+        elif self.control_mode == "traj_integrator":
+            self.last_U = self.last_U + self.U
+            action = self.last_U[:,0,[0]]
         else:
             action = self.U[:,0,[0]] # first action in sequence actions across batch
         
@@ -150,6 +154,8 @@ class MPPI():
                 action = self.mu(observation) + residual
             elif self.control_mode == "integrator":
                 action = action + residual
+            elif self.control_mode == "traj_integrator":
+                action = self.last_U[self.b, self.p, [t]] + residual
             else:
                 action = residual
             
@@ -174,6 +180,8 @@ class MPPI():
                 action = self.mu(observation) + residual
             elif self.control_mode == "integrator":
                 action = action + residual
+            elif self.control_mode == "traj_integrator":
+                action = self.last_U[self.b, 0, [self.T]] + residual
             else:
                 action = residual
             
@@ -228,6 +236,7 @@ class MPPI():
     def reset(self, U_init=None):
         """reinitialize all MPPI computations"""
         self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) if U_init is None else U_init.view((self.B, 1, self.T+1, self.nu))
+        self.last_U = self.u_init * torch.ones_like(self.U)
         self.last_action = self.u_init * torch.ones_like(self.U[:,:,0])
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
         self.value = torch.zeros(self.B, 1)
@@ -239,15 +248,19 @@ class MPPI():
 if __name__ == '__main__':
     import gymnasium as gym
     from env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
-    env_kwargs = {'exclude_current_positions_from_observation': False}
+    env_id = "InvertedPendulum-v5"
+    if any(s in env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Ant', 'Humanoid']):
+        env_kwargs = {'exclude_current_positions_from_observation': False}
+    else:
+        env_kwargs = {}
 
     B = 1
     P = 1
     K = 50
 
-    env = BaseEnvWrapper(gym.make('InvertedPendulum-v5', render_mode='human'))
+    env = BaseEnvWrapper(gym.make(env_id, render_mode='human', **env_kwargs))
     ns = env.observation_space.shape[0]
-    rollout_envs = gym.make_vec('InvertedPendulum-v5', num_envs=K, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper])
+    rollout_envs = gym.make_vec(env_id, num_envs=K, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper], **env_kwargs)
 
     cov = 0.1*torch.diag(torch.ones(np.prod(env.action_space.shape)))
     mppi = MPPI(env, rollout_envs=rollout_envs, K=K, T=20, B=B, P=P, cov=cov, lambda_=0.1)
