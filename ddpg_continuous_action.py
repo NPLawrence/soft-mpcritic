@@ -18,7 +18,7 @@ from gymppi.mppi import MPPI
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
 from torch_utils.networks import JointMLP_small, JointMLP_delta, JointMLP_InvPend
-from torch_utils.trainer import Trainer
+from torch_utils.trainer import Trainer, Trainer_ValueAligned
 
 @dataclass
 class Args:
@@ -98,15 +98,13 @@ class Args:
     """size/type of transition model network"""
     transition_batch_size: int = 32
     """batch size for transition model updates"""
-    model_predict_delta: bool = True
-    """train transition model on state deltas (next_obs - obs)"""
-    use_huber_loss: bool = True
+    use_huber_loss: bool = False
     """if True use Huber (SmoothL1) universally, else use MSE universally"""
     huber_delta: float = 1.0
     """SmoothL1 (Huber) transition point for both model/reward and Q losses"""
     value_aligned_model_loss: bool = False
     """if True, use value function to formulate cross-entropy model loss---otherwise use simple regression via `use_huber_loss`"""
-
+    temp_model_loss: str = "bce_exp"
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
     def thunk():
@@ -136,6 +134,35 @@ class QNetwork(nn.Module):
         x = F.tanh(self.fc2(x))
         x = self.fc3(x)
         return x
+
+class QNetwork_Bounds(nn.Module):
+    def __init__(self, env, gamma=0.99, bounded=False):
+        super().__init__()
+        self.fc1 = nn.Linear(np.array(env.single_observation_space.shape).prod() + np.prod(env.single_action_space.shape), 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc3 = nn.Linear(256, 1)
+        self.bounded = bounded
+        if self.bounded:
+            self.reward_bounds = env.envs[0].get_wrapper_attr('reward_bounds')
+            self.Q_high = self.reward_bounds['high'] / (1 - gamma)
+            self.Q_low = self.reward_bounds['low'] / (1 - gamma)
+            self.register_buffer(
+                "Q_scale", torch.tensor((self.Q_high - self.Q_low) / 2.0, dtype=torch.float32)
+            )
+            self.register_buffer(
+                "Q_bias", torch.tensor((self.Q_high + self.Q_low) / 2.0, dtype=torch.float32)
+            )
+
+    def forward(self, x, a):
+        x = torch.cat([x, a], 1)
+        x = F.silu(self.fc1(x))
+        x = F.silu(self.fc2(x))
+        if self.bounded:
+            x = torch.tanh(self.fc3(x))
+            return x * self.Q_scale + self.Q_bias
+        else:
+            x = self.fc3(x)
+            return x
 
 
 class Actor(nn.Module):
@@ -203,8 +230,12 @@ def train(args):
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     actor = Actor(envs).to(device)
-    qf1 = QNetwork(envs).to(device)
-    qf1_target = QNetwork(envs).to(device)
+    if args.value_aligned_model_loss:
+        qf1 = QNetwork_Bounds(envs, gamma=args.gamma, bounded=True).to(device)
+        qf1_target = QNetwork_Bounds(envs, gamma=args.gamma, bounded=True).to(device)
+    else:
+        qf1 = QNetwork(envs).to(device)
+        qf1_target = QNetwork(envs).to(device)
     model_loss = nn.SmoothL1Loss(beta=args.huber_delta) if args.use_huber_loss else nn.MSELoss()
     target_actor = Actor(envs).to(device)
     target_actor.load_state_dict(actor.state_dict())
@@ -231,18 +262,27 @@ def train(args):
                 transition_model = JointMLP_small(env=envs.envs[0])
             elif args.transition_network == 'InvertedPendulum':
                 transition_model = JointMLP_InvPend(env=envs.envs[0])
+            if args.value_aligned_model_loss:
+                transition_trainer = Trainer_ValueAligned(
+                    model=transition_model,
+                    actor=actor,
+                    critic=qf1,
+                    gamma=args.gamma,
+                    T=args.horizon,
+                    optimizer_class=Adam,
+                    lr=args.learning_rate,
+                    model_loss=model_loss,
+                    temp_behavior=args.temp_model_loss,
+                    huber_delta=args.huber_delta,
+                )
             else:
-                assert args.model_predict_delta
-                transition_model = JointMLP_delta(env=envs.envs[0])
-                
-            transition_trainer = Trainer(
-                transition_model,
-                Adam,
-                lr=args.learning_rate,
-                model_loss=model_loss,
-                predict_delta=args.model_predict_delta,
-                huber_delta=args.huber_delta,
-            )
+                transition_trainer = Trainer(
+                    transition_model,
+                    Adam,
+                    lr=args.learning_rate,
+                    model_loss=model_loss,
+                    huber_delta=args.huber_delta,
+                )
 
             mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
                         B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,

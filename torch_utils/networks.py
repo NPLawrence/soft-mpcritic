@@ -49,9 +49,11 @@ class JointMLP_InvPend(nn.Module):
 
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
-        y = F.relu(self.fc1(z))
-        y = F.relu(self.fc2(y))
-        x_next = self.fc3(y)
+        y = F.silu(self.fc1(z))
+        y = F.silu(self.fc2(y))
+        dx = self.fc3(y)
+        x_next = x + dx
+
         with torch.no_grad():
             reward = (torch.abs(x_next[...,1]) <= 0.2).float()
         return x_next, reward
