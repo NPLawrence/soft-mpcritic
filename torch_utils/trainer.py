@@ -24,7 +24,10 @@ class Trainer():
 
         pred_next_observations, pred_rewards = self.model(observations, actions)
 
-        dynamics_loss = self.model_loss(pred_next_observations, next_observations)
+        pred_dynamics = pred_next_observations - observations
+        target_dynamics = next_observations - observations
+
+        dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
         reward_loss = self.model_loss(pred_rewards, rewards)
         loss = dynamics_loss + reward_loss
         

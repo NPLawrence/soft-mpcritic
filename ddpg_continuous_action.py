@@ -135,36 +135,6 @@ class QNetwork(nn.Module):
         x = self.fc3(x)
         return x
 
-class QNetwork_Bounds(nn.Module):
-    def __init__(self, env, gamma=0.99, bounded=False):
-        super().__init__()
-        self.fc1 = nn.Linear(np.array(env.single_observation_space.shape).prod() + np.prod(env.single_action_space.shape), 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 1)
-        self.bounded = bounded
-        if self.bounded:
-            self.reward_bounds = env.envs[0].get_wrapper_attr('reward_bounds')
-            self.Q_high = self.reward_bounds['high'] / (1 - gamma)
-            self.Q_low = self.reward_bounds['low'] / (1 - gamma)
-            self.register_buffer(
-                "Q_scale", torch.tensor((self.Q_high - self.Q_low) / 2.0, dtype=torch.float32)
-            )
-            self.register_buffer(
-                "Q_bias", torch.tensor((self.Q_high + self.Q_low) / 2.0, dtype=torch.float32)
-            )
-
-    def forward(self, x, a):
-        x = torch.cat([x, a], 1)
-        x = F.silu(self.fc1(x))
-        x = F.silu(self.fc2(x))
-        if self.bounded:
-            x = torch.tanh(self.fc3(x))
-            return x * self.Q_scale + self.Q_bias
-        else:
-            x = self.fc3(x)
-            return x
-
-
 class Actor(nn.Module):
     def __init__(self, env):
         super().__init__()
@@ -230,12 +200,8 @@ def train(args):
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     actor = Actor(envs).to(device)
-    if args.value_aligned_model_loss:
-        qf1 = QNetwork_Bounds(envs, gamma=args.gamma, bounded=True).to(device)
-        qf1_target = QNetwork_Bounds(envs, gamma=args.gamma, bounded=True).to(device)
-    else:
-        qf1 = QNetwork(envs).to(device)
-        qf1_target = QNetwork(envs).to(device)
+    qf1 = QNetwork(envs).to(device)
+    qf1_target = QNetwork(envs).to(device)
     model_loss = nn.SmoothL1Loss(beta=args.huber_delta) if args.use_huber_loss else nn.MSELoss()
     target_actor = Actor(envs).to(device)
     target_actor.load_state_dict(actor.state_dict())
