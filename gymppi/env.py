@@ -33,6 +33,8 @@ class BaseEnvWrapper(gymnasium.Wrapper):
                 # current velocity is clipped when getting observation
                 return {'current_position':self.env.unwrapped.data.qpos[[0]],
                         'current_velocity':self.env.unwrapped.data.qvel}
+            if ':Cheetah' in self.env.unwrapped.spec.entry_point:
+                return {'current_position':self.env.unwrapped.data.qpos[[0]]}
             
     @property
     def reward_bounds(self):
@@ -110,6 +112,14 @@ class BaseEnvWrapper(gymnasium.Wrapper):
                 ctrl_cost = self.env.unwrapped._ctrl_cost_weight * torch.sum(torch.square(action), dim=-1, keepdim=True)
 
                 return forward_reward + healthy_reward - ctrl_cost
+            if ':Cheetah' in self.env.unwrapped.spec.entry_point:
+                x_position_before = obs[...,[0]]
+                x_position_after = next_obs[...,[0]]
+                x_velocity = (x_position_after - x_position_before) / self.env.unwrapped.dt
+                forward_reward = self.env.unwrapped._forward_reward_weight * x_velocity
+                ctrl_cost = self.env.unwrapped._ctrl_cost_weight * torch.sum(torch.square(action), dim=-1, keepdim=True)
+
+                return forward_reward - ctrl_cost
 
 
 class ClassicMPPIWrapper(gymnasium.Wrapper):
@@ -214,6 +224,14 @@ class MujocoMPPIWrapper(gymnasium.Wrapper):
                 qpos = observation[:self.n_qpos]
                 # current velocity is clipped when getting observation
                 qvel = extra['current_velocity']
+
+        if self.env_id == 'HalfCheetah-v5':
+            if self.env.unwrapped._exclude_current_positions_from_observation:
+                qpos = np.concatenate([extra['current_position'], observation[:self.n_qpos-1]])
+                qvel = observation[self.n_qpos-1:self.n_qpos-1+self.n_qvel]
+            else:
+                qpos = observation[:self.n_qpos]
+                qvel = observation[self.n_qpos:self.n_qpos+self.n_qvel]
 
         return qpos, qvel
 
