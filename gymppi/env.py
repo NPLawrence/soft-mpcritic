@@ -50,6 +50,8 @@ class BaseEnvWrapper(gymnasium.Wrapper):
                 return {'low': -3, 'high': 0} # rough lower bound estimate (upper exact)
             if ':Hopper' in self.env.unwrapped.spec.entry_point:
                 return {'low': -10, 'high': 10} # very rough on both bound estimates
+            if ':HalfCheetah' in self.env.unwrapped.spec.entry_point:
+                return {'low': -20, 'high': 20} # very rough on both bound estimates
             
     def get_torch_reward(self, obs, action, next_obs):
         # undecided if needing with torch.no_grad(): 
@@ -112,7 +114,7 @@ class BaseEnvWrapper(gymnasium.Wrapper):
                 ctrl_cost = self.env.unwrapped._ctrl_cost_weight * torch.sum(torch.square(action), dim=-1, keepdim=True)
 
                 return forward_reward + healthy_reward - ctrl_cost
-            if ':Cheetah' in self.env.unwrapped.spec.entry_point:
+            if ':HalfCheetah' in self.env.unwrapped.spec.entry_point:
                 x_position_before = obs[...,[0]]
                 x_position_after = next_obs[...,[0]]
                 x_velocity = (x_position_after - x_position_before) / self.env.unwrapped.dt
