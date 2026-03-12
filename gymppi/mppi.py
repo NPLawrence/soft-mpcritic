@@ -248,15 +248,19 @@ class MPPI():
 if __name__ == '__main__':
     import gymnasium as gym
     from env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
-    env_kwargs = {'exclude_current_positions_from_observation': False}
+    env_id = "InvertedPendulum-v5"
+    if any(s in env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Ant', 'Humanoid']):
+        env_kwargs = {'exclude_current_positions_from_observation': False}
+    else:
+        env_kwargs = {}
 
     B = 1
     P = 1
     K = 50
 
-    env = BaseEnvWrapper(gym.make('InvertedPendulum-v5', render_mode='human'))
+    env = BaseEnvWrapper(gym.make(env_id, render_mode='human', **env_kwargs))
     ns = env.observation_space.shape[0]
-    rollout_envs = gym.make_vec('InvertedPendulum-v5', num_envs=K, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper])
+    rollout_envs = gym.make_vec(env_id, num_envs=K, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper], **env_kwargs)
 
     cov = 0.1*torch.diag(torch.ones(np.prod(env.action_space.shape)))
     mppi = MPPI(env, rollout_envs=rollout_envs, K=K, T=20, B=B, P=P, cov=cov, lambda_=0.1)
