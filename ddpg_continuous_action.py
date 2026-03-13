@@ -73,7 +73,9 @@ class Args:
     env_in_mppi: bool = True
     """use the environment for MPPI rollouts"""
     mppi_control_mode: str = "default"
-    """MPPI control mode: one of {'default','mu','integrator'}"""
+    """MPPI online control mode: one of {'default','mu','integrator'}"""
+    mppi_target_mode: str = "default"
+    """MPPI offline target mode: one of {'default','mu','integrator'}"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
     mppi_targets: bool = True
@@ -84,6 +86,8 @@ class Args:
     """length of MPPI rollouts/trajectories"""
     num_rollouts: int = 100
     """number of rollouts/trajectory samples for MPPI"""
+    num_target_rollouts: int = 100
+    """number of rollouts/trajectory samples for MPPI targets"""
     num_particles: int = 1
     """number of states/particles to rollout from"""
     var: float = 0.1
@@ -221,7 +225,7 @@ def train(args):
                         lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
+                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov)
         else:
             if args.transition_network == 'small':
@@ -257,7 +261,7 @@ def train(args):
                         lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
+                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov)
 
     rb = WarmstartReplayBuffer(
