@@ -226,11 +226,14 @@ def train(args):
         else:
             if args.transition_network == 'small':
                 transition_model = JointMLP_small(env=envs.envs[0])
+            elif args.transition_network == 'big':
+                from torch_utils.networks import JointMLP_big
+                transition_model = JointMLP_big(env=envs.envs[0])
             if args.value_aligned_model_loss:
                 transition_trainer = Trainer_ValueAligned(
                     model=transition_model,
-                    actor=target_actor,
-                    critic=qf1_target,
+                    actor=actor,
+                    critic=qf1,
                     gamma=args.gamma,
                     T=args.horizon,
                     optimizer_class=Adam,
