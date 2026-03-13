@@ -17,7 +17,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from gymppi.mppi import MPPI
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP_small
+from torch_utils.networks import JointMLP_small, JointMLP_medium, JointMLP_large
 from torch_utils.trainer import Trainer, Trainer_ValueAligned
 
 @dataclass
@@ -226,6 +226,10 @@ def train(args):
         else:
             if args.transition_network == 'small':
                 transition_model = JointMLP_small(env=envs.envs[0])
+            if args.transition_network == 'medium':
+                transition_model = JointMLP_medium(env=envs.envs[0])
+            if args.transition_network == 'large':
+                transition_model = JointMLP_large(env=envs.envs[0])
             if args.value_aligned_model_loss:
                 transition_trainer = Trainer_ValueAligned(
                     model=transition_model,
