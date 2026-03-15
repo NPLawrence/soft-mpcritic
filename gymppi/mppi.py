@@ -37,7 +37,8 @@ class MPPI():
 
         assert self.transition_model or self.rollout_envs # use either (f,l) or rollout_envs to simulate rollouts
         if self.rollout_envs:
-            assert self.rollout_envs.num_envs == self.K # one rollout_env for each sample
+            assert len(self.rollout_envs) == self.B
+            assert all([self.rollout_envs[i].num_envs == self.K for i in range(self.B)]) # one rollout_env for each sample
 
         self.lambda_ = lambda_ # free energy scale/parameter
         self.mean = torch.zeros(self.nu, dtype=self.dtype) if (mean is None) else mean.to(dtype=self.dtype) # mean of action noise distribution
@@ -86,78 +87,43 @@ class MPPI():
         # Sample all noise at once: [B, K, T+1, nu]
         self.noise = self.noise_dist.rsample((self.B, self.K, self.T + 1))
 
-        if self.transition_model is not None:
-            # --- Fully batched path: vectorise over B × K ---
-            rollout_cost = self._compute_rollout_costs_batched()  # [B, K]
+        if self.rollout_envs:
+            self._sync_envs()
 
-            if self.control_mode in {"mean_residual", "warmstart_residual"}:
-                perturbation_base = self.delta_U  # [B, 1, T+1, nu]
-            else:
-                perturbation_base = self.U        # [B, 1, T+1, nu]
+        # --- Fully batched path: vectorise over B × K ---
+        rollout_cost = self._compute_rollout_costs_batched()  # [B, K]
 
-            # action_cost: [B, K, T+1, nu]; perturbation_cost: [B, K]
-            action_cost = self.lambda_ * self.noise @ self.inv_cov
-            perturbation_cost = torch.sum(
-                self.discounting.view(1, 1, -1, 1) * perturbation_base * action_cost,
-                dim=(2, 3),
-            )  # [B, K]
-
-            rep_noise = self.noise                                          # [B, K, T+1, nu]
-
-            cost_total = rollout_cost + perturbation_cost                  # [B, K]
-            beta = torch.min(cost_total, dim=1, keepdim=True).values       # [B, 1]
-            cost_total_non_zero = torch.exp(-(1.0 / self.lambda_) * (cost_total - beta))  # [B, K]
-
-            if mode == 'value':
-                logmeanexp = torch.log(torch.mean(cost_total_non_zero, dim=1))           # [B]
-                term1 = -self.lambda_ * (-beta.squeeze(1) / self.lambda_ + logmeanexp)
-                term2 = self.lambda_ / 2 * torch.sum(
-                    self.discounting.view(1, 1, -1, 1) * perturbation_base * (perturbation_base @ self.inv_cov),
-                    dim=(1, 2, 3),
-                )  # [B]
-                self.value = -(term1 + term2).unsqueeze(1)  # [B, 1]
-
-            eta = torch.sum(cost_total_non_zero, dim=1, keepdim=True)  # [B, 1]
-            omega = cost_total_non_zero / eta                           # [B, K]
-            perturbations = torch.einsum('bk,bktu->btu', omega, rep_noise)  # [B, T+1, nu]
-            self.U[:, 0] = self.U[:, 0] + perturbations
-
+        if self.control_mode in {"mean_residual", "warmstart_residual"}:
+            perturbation_base = self.delta_U  # [B, 1, T+1, nu]
         else:
-            # --- Sequential fallback for rollout_envs (requires B=1 at K envs for exact equivalence) ---
-            for b in range(self.B):
-                self.b = b
-                self.rollout_observation = self.observation[b]
-                self._sync_envs(self.rollout_observation.numpy())
-                rollout_cost_b = self._compute_rollout_costs_single(self.rollout_observation)
+            perturbation_base = self.U        # [B, 1, T+1, nu]
 
-                if self.control_mode in {"mean_residual", "warmstart_residual"}:
-                    perturbation_base_b = self.delta_U[b]
-                else:
-                    perturbation_base_b = self.U[b]
+        # action_cost: [B, K, T+1, nu]; perturbation_cost: [B, K]
+        action_cost = self.lambda_ * self.noise @ self.inv_cov
+        perturbation_cost = torch.sum(
+            self.discounting.view(1, 1, -1, 1) * perturbation_base * action_cost,
+            dim=(2, 3),
+        )  # [B, K]
 
-                action_cost_b = self.lambda_ * self.noise[b] @ self.inv_cov
-                perturbation_cost_b = torch.sum(
-                    self.discounting.view(1, -1, 1) * perturbation_base_b * action_cost_b, dim=(1, 2)
-                )
-                rep_noise_b = self.noise[b]
+        rep_noise = self.noise                                          # [B, K, T+1, nu]
 
-                cost_total_b = rollout_cost_b + perturbation_cost_b
-                beta_b = torch.min(cost_total_b)
-                cost_total_non_zero_b = torch.exp(-(1.0 / self.lambda_) * (cost_total_b - beta_b))
+        cost_total = rollout_cost + perturbation_cost                  # [B, K]
+        beta = torch.min(cost_total, dim=1, keepdim=True).values       # [B, 1]
+        cost_total_non_zero = torch.exp(-(1.0 / self.lambda_) * (cost_total - beta))  # [B, K]
 
-                if mode == 'value':
-                    logmeanexp = torch.log(torch.mean(cost_total_non_zero_b))
-                    term1 = -self.lambda_ * (-beta_b / self.lambda_ + logmeanexp)
-                    term2 = self.lambda_ / 2 * torch.sum(
-                        self.discounting.view(1, -1, 1) * perturbation_base_b * (perturbation_base_b @ self.inv_cov),
-                        dim=(1, 2),
-                    )
-                    self.value[b] = -(term1 + term2)
+        if mode == 'value':
+            logmeanexp = torch.log(torch.mean(cost_total_non_zero, dim=1))           # [B]
+            term1 = -self.lambda_ * (-beta.squeeze(1) / self.lambda_ + logmeanexp)
+            term2 = self.lambda_ / 2 * torch.sum(
+                self.discounting.view(1, 1, -1, 1) * perturbation_base * (perturbation_base @ self.inv_cov),
+                dim=(1, 2, 3),
+            )  # [B]
+            self.value = -(term1 + term2).unsqueeze(1)  # [B, 1]
 
-                eta_b = torch.sum(cost_total_non_zero_b)
-                omega_b = cost_total_non_zero_b / eta_b
-                perturbations_b = torch.sum(omega_b.view(-1, 1, 1) * rep_noise_b, dim=0)
-                self.U[b] = self.U[b] + perturbations_b
+        eta = torch.sum(cost_total_non_zero, dim=1, keepdim=True)  # [B, 1]
+        omega = cost_total_non_zero / eta                           # [B, K]
+        perturbations = torch.einsum('bk,bktu->btu', omega, rep_noise)  # [B, T+1, nu]
+        self.U[:, 0] = self.U[:, 0] + perturbations
 
         if self.control_mode == "mu":
             if self.mu is None:
@@ -303,100 +269,10 @@ class MPPI():
 
         base_expanded = base.unsqueeze(1).expand(B, K, nu)          # [B, K, nu]
         residual = base_expanded + self.noise[:, :, t, :]            # [B, K, nu]
+        # with clamping called after _get_perturbed_action_batched, this isn't doing anything
         self.noise[:, :, t, :] = residual - base_expanded           # update in-place (clamping propagation)
 
         return residual.reshape(B * K, nu)
-
-    def _compute_rollout_costs_single(self, rollout_observation):
-        """compute cost/reward for K trajectories (sequential; used by rollout_envs path)"""
-        rollout_cost = torch.zeros(self.K, dtype=self.dtype)
-
-        observation = rollout_observation.repeat(self.K, 1)
-        observations = [observation]
-        actions = []
-
-        action = self.last_action[self.b, 0].view(1, -1).repeat(self.K, 1)
-        if self.control_mode == "mean_residual":
-            mean_action = self.mean_U[self.b, 0, 0].view(1, -1).repeat(self.K, 1)
-        elif self.control_mode == "warmstart_residual":
-            baseline_traj = self.traj_baseline_U[self.b, 0]
-        for t in range(self.T):
-            residual = self._get_perturbed_action_single(t)
-            
-            if self.control_mode == "mu":
-                if self.mu is None:
-                    raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
-                action = self.mu(observation) + residual
-            elif self.control_mode == "integrator":
-                action = action + residual
-            elif self.control_mode == "traj_integrator":
-                action = self.last_U[self.b, 0, [t]] + residual
-            elif self.control_mode == "mean_residual":
-                action = mean_action + residual
-            elif self.control_mode == "warmstart_residual":
-                action = baseline_traj[t].view(1, -1).repeat(self.K, 1) + residual
-            else:
-                action = residual
-            
-            # Ensure action is within bounds
-            action = self._bound_action(action)
-
-
-            next_observation, l = self._step_rollout(observation, action)
-            rollout_cost += self.discounting[t] * l
-
-            observation = next_observation
-
-            actions.append(action)
-            observations.append(observation)
-
-        if self.Q is not None:
-            residual = self._get_perturbed_action_single(self.T)
-            
-            if self.control_mode == "mu":
-                if self.mu is None:
-                    raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
-                action = self.mu(observation) + residual
-            elif self.control_mode == "integrator":
-                action = action + residual
-            elif self.control_mode == "traj_integrator":
-                action = self.last_U[self.b, 0, [self.T]] + residual
-            elif self.control_mode == "mean_residual":
-                action = mean_action + residual
-            elif self.control_mode == "warmstart_residual":
-                action = baseline_traj[self.T].view(1, -1).repeat(self.K, 1) + residual
-            else:
-                action = residual
-            
-            # Ensure action is within bounds
-            action = self._bound_action(action)
-            
-            rollout_cost += self.discounting[self.T] * -self.Q(observation, action).flatten()
-
-            next_observation, _ = self._step_rollout(observation, action)
-            observation = next_observation
-
-            actions.append(action)
-            observations.append(observation)
-
-        # Actions is K x T x nu or K x T+1 x nu if self.Q
-        # Observations is K x T+1 x nx or K x T+2 x ns if self.Q
-        self.rollout_actions = torch.stack(actions, dim=-2)
-        self.rollout_observations = torch.stack(observations, dim=-2)
-
-        return rollout_cost
-    
-    def _get_perturbed_action_single(self, t):
-        """Return residual [K, nu] for the current self.b batch element (rollout_envs path)."""
-        if self.control_mode in {"mean_residual", "warmstart_residual"}:
-            base = self.delta_U[self.b, 0, t]  # [nu] → broadcast below
-        else:
-            base = self.U[self.b, 0, t]        # [nu]
-
-        base_k = base.unsqueeze(0).expand(self.K, self.nu)    # [K, nu]
-        residual = base_k + self.noise[self.b, :, t]          # [K, nu]
-        self.noise[self.b, :, t] = residual - base_k
-        return residual
 
     def _bound_action(self, action):
         """bound action within action space"""
@@ -410,14 +286,23 @@ class MPPI():
             next_observations, rewards = self.transition_model(observation, action)
             return next_observations.to(self.dtype), -rewards.flatten().to(self.dtype)
         else:
-            next_observation, rewards, terminations, truncations, infos = self.rollout_envs.step(action.numpy())
-            return torch.from_numpy(next_observation).view(self.K, self.ns).to(self.dtype), -torch.from_numpy(rewards).to(self.dtype)
+            action = action.view(self.B, self.K, self.nu)
+            next_observations_list = []
+            rewards_list = []
+            for (rollout_env, act) in zip(self.rollout_envs, action):
+                next_obs, rew, _, _, _ = rollout_env.step(act.numpy())
+                next_observations_list.append(next_obs)
+                rewards_list.append(rew)
+            next_observation = np.concatenate(next_observations_list)
+            rewards = np.concatenate(rewards_list)
+            return torch.from_numpy(next_observation).to(self.dtype), -torch.from_numpy(rewards).to(self.dtype)
 
-    def _sync_envs(self, observation):
+    def _sync_envs(self):
         """align the mppi environments"""
-        if self.rollout_envs:
-            self.rollout_envs.reset(options={'observation':observation,
-                                             'extra':self.env.get_wrapper_attr('_extra')}) # set MPPIEnvs to state
+        observation = self.observation.numpy()
+        for (rollout_env, obs) in zip(self.rollout_envs, observation):
+            rollout_env.reset(options={'observation':obs,
+                                       'extra':self.env.get_wrapper_attr('_extra')}) # set MPPIEnvs to state
 
     def reset(self, U_init=None):
         """reinitialize all MPPI computations"""
@@ -444,11 +329,11 @@ if __name__ == '__main__':
     K = 100
     T = 30
 
-    control_mode = "warmstart_residual"
+    control_mode = "default"
 
     env = BaseEnvWrapper(gym.make(env_id, render_mode='human', **env_kwargs))
     ns = env.observation_space.shape[0]
-    rollout_envs = gym.make_vec(env_id, num_envs=K, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper], **env_kwargs)
+    rollout_envs = [gym.make_vec(env_id, num_envs=K, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper], **env_kwargs) for _ in range(B)]
 
     cov = 0.1*torch.diag(torch.ones(np.prod(env.action_space.shape)))
     mppi = MPPI(env, rollout_envs=rollout_envs, K=K, T=T, B=B, cov=cov, lambda_=0.1, control_mode=control_mode)
@@ -457,7 +342,7 @@ if __name__ == '__main__':
     env.render()
     
     cumulative_reward = 0.0
-    for _ in range(100):
+    for _ in range(1000):
         batch = np.repeat(obs[None, :], B, axis=0)
         belief = batch + 0.*np.random.randn(B, ns)
         action = mppi.make_step(belief)
@@ -471,4 +356,4 @@ if __name__ == '__main__':
 
     print("Cumulative reward:", cumulative_reward)
     env.close()
-    rollout_envs.close()
+    [env.close() for env in rollout_envs]

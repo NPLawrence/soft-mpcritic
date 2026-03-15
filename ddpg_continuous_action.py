@@ -198,7 +198,12 @@ def train(args):
     envs = gym.vector.SyncVectorEnv([make_env(args.env_id, args.seed, 0, args.capture_video, run_name, env_kwargs)],
                                     autoreset_mode=gym.vector.AutoresetMode.SAME_STEP)    
     if args.mppi and args.env_in_mppi:
-        rollout_envs = gym.make_vec(args.env_id, num_envs=args.num_rollouts, vectorization_mode=args.vectorization_mode, wrappers=[MujocoMPPIWrapper], **env_kwargs)
+        rollout_envs = [gym.make_vec(args.env_id, num_envs=args.num_rollouts, vectorization_mode=args.vectorization_mode, wrappers=[MujocoMPPIWrapper], **env_kwargs) for _ in range(args.batch_size)]
+    if args.mppi and args.env_in_mppi and args.mppi_targets:
+        if args.num_rollouts != args.num_target_rollouts:
+            target_rollout_envs = [gym.make_vec(args.env_id, num_envs=args.num_target_rollouts, vectorization_mode=args.vectorization_mode, wrappers=[MujocoMPPIWrapper], **env_kwargs) for _ in range(args.batch_size)]
+        else:
+            target_rollout_envs = rollout_envs
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     actor = Actor(envs).to(device)
@@ -218,11 +223,11 @@ def train(args):
         cov = args.var*torch.diag(torch.ones(np.prod(envs.single_action_space.shape), dtype=torch.float32))
 
         if args.env_in_mppi:
-            mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=Q, mu=actor,
+            mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs[0:1], gamma=args.gamma, Q=Q, mu=actor,
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
                         lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
-                target_mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
+                target_mppi = MPPI(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
                                 B=args.batch_size, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov)
         else:
@@ -423,6 +428,10 @@ def train(args):
     if args.track:
         wandb.finish()
     envs.close()
+    if args.mppi and args.env_in_mppi:
+        [env.close() for env in rollout_envs]
+        if args.num_rollouts != args.num_target_rollouts:
+            [env.close() for env in target_rollout_envs]
     writer.close()
     wandb.finish()
 
