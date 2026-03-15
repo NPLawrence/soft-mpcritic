@@ -73,9 +73,9 @@ class Args:
     env_in_mppi: bool = True
     """use the environment for MPPI rollouts"""
     mppi_control_mode: str = "default"
-    """MPPI online control mode: one of {'default','mu','integrator'}"""
+    """MPPI online control mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
     mppi_target_mode: str = "default"
-    """MPPI offline target mode: one of {'default','mu','integrator'}"""
+    """MPPI offline target mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
     mppi_targets: bool = True
@@ -88,8 +88,6 @@ class Args:
     """number of rollouts/trajectory samples for MPPI"""
     num_target_rollouts: int = 100
     """number of rollouts/trajectory samples for MPPI targets"""
-    num_particles: int = 1
-    """number of states/particles to rollout from"""
     var: float = 0.1
     """variance for noise in each action dimension"""
     lambda_: float = 0.1
@@ -215,17 +213,17 @@ def train(args):
 
     if args.mppi:
         Q = qf1 if args.Q_in_mppi else None
-        if args.mppi_control_mode not in {"default", "mu", "integrator"}:
-            raise ValueError(f"Invalid mppi_control_mode={args.mppi_control_mode}. Expected one of 'default', 'mu', 'integrator'.")
+        if args.mppi_control_mode not in {"default", "mu", "integrator", "mean_residual", "warmstart_residual"}:
+            raise ValueError(f"Invalid mppi_control_mode={args.mppi_control_mode}. Expected one of 'default', 'mu', 'integrator', 'mean_residual', 'warmstart_residual'.")
         cov = args.var*torch.diag(torch.ones(np.prod(envs.single_action_space.shape), dtype=torch.float32))
 
         if args.env_in_mppi:
             mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=Q, mu=actor,
-                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
+                        B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
                         lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
+                                B=args.batch_size, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov)
         else:
             if args.transition_network == 'small':
@@ -257,11 +255,11 @@ def train(args):
                 )
 
             mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
-                        B=1, P=args.num_particles, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
+                        B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
                         lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, P=args.num_particles, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
+                                B=args.batch_size, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov)
 
     rb = WarmstartReplayBuffer(
@@ -282,17 +280,17 @@ def train(args):
         # ALGO LOGIC: put action logic here
         if global_step < args.learning_starts:
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
-            Us = np.empty([args.num_particles, args.horizon+1] + list(envs.single_action_space.shape))
+            Us = np.empty([1, args.horizon+1] + list(envs.single_action_space.shape))
         else:
             with torch.no_grad():
                 if not args.mppi:
                     actions = actor(torch.Tensor(obs).to(dtype=torch.float32).to(device))
                     actions += torch.normal(0, actor.action_scale * args.exploration_noise)
                     actions = actions.cpu().numpy().clip(envs.single_action_space.low, envs.single_action_space.high)
-                    Us = np.empty([args.num_particles, args.horizon+1] + list(envs.single_action_space.shape))
+                    Us = np.empty([1, args.horizon+1] + list(envs.single_action_space.shape))
                 else:
-                    # ensure obs is shape of B X P X 1 X S, assumes B=1
-                    actions = mppi.make_step(obs.reshape(1, args.num_particles, 1, -1))[0]
+                    # ensure obs is shape of B x S, assumes B=1
+                    actions = mppi.make_step(obs.reshape(1, -1))[0]
                     Us = mppi.U[0].cpu().numpy()
 
         # TRY NOT TO MODIFY: execute the game and log data.
@@ -337,7 +335,7 @@ def train(args):
             data, batch_inds, env_indices = rb.sample(args.batch_size)
             with torch.no_grad():
                 if args.mppi and args.mppi_targets:
-                    mppi_next_observations = data.next_observations.reshape(args.batch_size, args.num_particles, 1, -1)
+                    mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
                     U_init = data.Us if args.mppi_target_warmstart else None
 
                     # target_mppi.reset(U_init)
