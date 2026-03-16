@@ -79,7 +79,7 @@ class Args:
     """MPPI offline target mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
-    mppi_online: bool = False
+    mppi_online: bool = True
     """use MPPI for online control"""
     mppi_targets: bool = True
     """use MPPI for Q-function targets"""
