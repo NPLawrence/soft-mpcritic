@@ -14,7 +14,8 @@ from torch.optim.adam import Adam
 import tyro
 from torch.utils.tensorboard.writer import SummaryWriter
 
-from gymppi.mppi import MPPI
+from gymppi.mppi import print
+
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
 from torch_utils.networks import JointMLP_small, JointMLP_medium, JointMLP_large, EnsembleDynamicsModel
@@ -334,10 +335,6 @@ def train(args):
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if "final_info" in infos:
-            # for info in infos["final_info"]:
-            #     print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
-            #     writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
-            #     writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
             for idx, final in enumerate(np.logical_or(terminations, truncations)):
                 print(f"global_step={global_step}, episodic_return={infos['final_info']['episode']['r'][idx]}")
                 writer.add_scalar("charts/episodic_return", infos['final_info']["episode"]["r"][idx], global_step)
@@ -432,27 +429,6 @@ def train(args):
         model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
         torch.save((actor.state_dict(), qf1.state_dict()), model_path)
         print(f"model saved to {model_path}")
-        # from cleanrl_utils.evals.ddpg_eval import evaluate
-
-        # episodic_returns = evaluate(
-        #     model_path,
-        #     make_env,
-        #     args.env_id,
-        #     eval_episodes=10,
-        #     run_name=f"{run_name}-eval",
-        #     Model=(Actor, QNetwork),
-        #     device=device,
-        #     exploration_noise=args.exploration_noise,
-        # )
-        # for idx, episodic_return in enumerate(episodic_returns):
-        #     writer.add_scalar("eval/episodic_return", episodic_return, idx)
-
-        # if args.upload_model:
-        #     from cleanrl_utils.huggingface import push_to_hub
-
-        #     repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
-        #     repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
-        #     push_to_hub(args, episodic_returns, repo_id, "DDPG", f"runs/{run_name}", f"videos/{run_name}-eval")
 
     if args.track:
         wandb.finish()
