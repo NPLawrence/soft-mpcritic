@@ -96,3 +96,48 @@ class Trainer_ValueAligned():
         self.model_optimizer.step()
 
         return dynamics_loss, torch.tensor(0.0)
+
+
+class EnsembleTrainer():
+    def __init__(
+        self,
+        model,
+        optimizer_class=Adam,
+        lr=3e-4,
+        model_loss=None,
+        huber_delta=1.0,
+    ):
+        self.model = model
+        self.model_loss = nn.SmoothL1Loss(beta=huber_delta) if model_loss is None else model_loss
+        self.model_optimizer = optimizer_class(list(self.model.parameters()), lr=lr)
+
+    def update(self, data):
+        device = next(self.model.parameters()).device
+        observations = data.observations.to(device=device, dtype=torch.float32)
+        actions = data.actions.to(device=device, dtype=torch.float32)
+        next_observations = data.next_observations.to(device=device, dtype=torch.float32)
+        rewards = data.rewards.to(device=device, dtype=torch.float32)
+
+        dynamics_losses = []
+        reward_losses = []
+        for member_model in self.model.models:
+            pred_next_observations, pred_rewards = member_model(observations, actions)
+
+            pred_dynamics = pred_next_observations - observations
+            target_dynamics = next_observations - observations
+
+            dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
+            reward_loss = self.model_loss(pred_rewards, rewards)
+
+            dynamics_losses.append(dynamics_loss)
+            reward_losses.append(reward_loss)
+
+        mean_dynamics_loss = torch.stack(dynamics_losses).mean()
+        mean_reward_loss = torch.stack(reward_losses).mean()
+        loss = mean_dynamics_loss + mean_reward_loss
+
+        self.model_optimizer.zero_grad()
+        loss.backward()
+        self.model_optimizer.step()
+
+        return mean_dynamics_loss, mean_reward_loss

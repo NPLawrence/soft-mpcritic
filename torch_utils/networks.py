@@ -3,6 +3,18 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+
+def _build_transition_model(env, network_size):
+    if network_size == "small":
+        return JointMLP_small(env=env)
+    if network_size == "medium":
+        return JointMLP_medium(env=env)
+    if network_size == "large":
+        return JointMLP_large(env=env)
+    raise ValueError(
+        f"Unknown network_size={network_size}. Expected one of 'small', 'medium', 'large'."
+    )
+
 class JointMLP_small(nn.Module):
     def __init__(self, env):
         super().__init__()
@@ -74,3 +86,21 @@ class JointMLP_large(nn.Module):
         with torch.no_grad():
             reward = self.get_torch_reward(x, u, x_next)
         return x_next, reward
+
+
+class EnsembleDynamicsModel(nn.Module):
+    def __init__(self, env, ensemble_size=5, network_size="small"):
+        super().__init__()
+        if ensemble_size < 1:
+            raise ValueError(f"ensemble_size must be >= 1, got {ensemble_size}.")
+
+        self.ensemble_size = ensemble_size
+        self.network_size = network_size
+        self.models = nn.ModuleList(
+            [_build_transition_model(env, network_size) for _ in range(ensemble_size)]
+        )
+
+    def forward(self, x, u):
+        # Randomized model selection makes the ensemble directly usable by MPPI.
+        model_idx = torch.randint(self.ensemble_size, (1,), device=x.device).item()
+        return self.models[model_idx](x, u)
