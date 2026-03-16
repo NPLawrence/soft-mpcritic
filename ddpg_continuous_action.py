@@ -14,7 +14,7 @@ from torch.optim.adam import Adam
 import tyro
 from torch.utils.tensorboard.writer import SummaryWriter
 
-from gymppi.mppi import print
+from gymppi.mppi import MPPI
 
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
@@ -70,7 +70,7 @@ class Args:
 
     # MPPI arguments
     mppi: bool = True
-    """use MPPI online (making extra envs)"""
+    """use MPPI in any way--control or targets--otherwise revert to base algorithm (making extra envs)"""
     env_in_mppi: bool = True
     """use the environment for MPPI rollouts"""
     mppi_control_mode: str = "default"
@@ -79,6 +79,8 @@ class Args:
     """MPPI offline target mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
+    mppi_online: bool = False
+    """use MPPI for online control"""
     mppi_targets: bool = True
     """use MPPI for Q-function targets"""
     mppi_target_warmstart: bool = True
@@ -166,6 +168,12 @@ class Actor(nn.Module):
 def train(args):
     # args = tyro.cli(Args)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+
+    if not args.mppi and (args.mppi_online or args.mppi_targets):
+        raise ValueError(
+            "Inconsistent MPPI settings: mppi=False but mppi_online or mppi_targets is True. "
+            "Set mppi=True to use MPPI control/targets, or set mppi_online=False and mppi_targets=False."
+        )
 
     if any(s in args.env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Humanoid']):
         env_kwargs = {'exclude_current_positions_from_observation': False}
@@ -322,7 +330,7 @@ def train(args):
             Us = np.empty([1, args.horizon+1] + list(envs.single_action_space.shape))
         else:
             with torch.no_grad():
-                if not args.mppi:
+                if not args.mppi_online:
                     actions = actor(torch.Tensor(obs).to(dtype=torch.float32).to(device))
                     actions += torch.normal(0, actor.action_scale * args.exploration_noise)
                     actions = actions.cpu().numpy().clip(envs.single_action_space.low, envs.single_action_space.high)
