@@ -35,6 +35,14 @@ class BaseEnvWrapper(gymnasium.Wrapper):
                         'current_velocity':self.env.unwrapped.data.qvel}
             if ':Cheetah' in self.env.unwrapped.spec.entry_point:
                 return {'current_position':self.env.unwrapped.data.qpos[[0]]}
+            if ':Walker2d' in self.env.unwrapped.spec.entry_point:
+                # current velocity is clipped when getting observation
+                return {'current_position':self.env.unwrapped.data.qpos[[0]],
+                        'current_velocity':self.env.unwrapped.data.qvel}
+            if ':Ant' in self.env.unwrapped.spec.entry_point:
+                return {'x_position':self.env.unwrapped.data.qpos[[0]],
+                        'y_position':self.env.unwrapped.data.qpos[[1]],
+                        'contact_force':self.env.unwrapped.contact_forces[1:].flatten()}
             
     @property
     def reward_bounds(self):
@@ -52,6 +60,10 @@ class BaseEnvWrapper(gymnasium.Wrapper):
                 return {'low': -10, 'high': 10} # very rough on both bound estimates
             if ':HalfCheetah' in self.env.unwrapped.spec.entry_point:
                 return {'low': -20, 'high': 20} # very rough on both bound estimates
+            if ':Walker2d' in self.env.unwrapped.spec.entry_point:
+                return {'low': -10, 'high': 10} # very rough on both bound estimates
+            if ':Ant' in self.env.unwrapped.spec.entry_point:
+                return {'low': -10, 'high': 10} # very rough on both bound estimates
             
     def get_torch_reward(self, obs, action, next_obs):
         # undecided if needing with torch.no_grad(): 
@@ -122,7 +134,47 @@ class BaseEnvWrapper(gymnasium.Wrapper):
                 ctrl_cost = self.env.unwrapped._ctrl_cost_weight * torch.sum(torch.square(action), dim=-1, keepdim=True)
 
                 return forward_reward - ctrl_cost
+            if ':Walker2d' in self.env.unwrapped.spec.entry_point:
+                # assumes self.env.unwrapped._exclude_current_positions_from_observation = False
+                x_position_before = obs[...,[0]]
+                x_position_after = next_obs[...,[0]]
+                x_velocity = (x_position_after - x_position_before) / self.env.unwrapped.dt
 
+                z = next_obs[...,[1]]
+                angle = next_obs[...,[2]]
+
+                min_z, max_z = self.env.unwrapped._healthy_z_range
+                min_angle, max_angle = self.env.unwrapped._healthy_angle_range
+
+                healthy_z = torch.logical_and(min_z < z, z < max_z)
+                healthy_angle = torch.logical_and(min_angle < angle, angle < max_angle)
+                is_healthy = torch.all(torch.concat([healthy_z, healthy_angle], dim=-1), dim=-1, keepdim=True)
+
+                forward_reward = self.env.unwrapped._forward_reward_weight * x_velocity
+                healthy_reward = self.env.unwrapped._healthy_reward * is_healthy
+                ctrl_cost = self.env.unwrapped._ctrl_cost_weight * torch.sum(torch.square(action), dim=-1, keepdim=True)
+
+                return forward_reward + healthy_reward - ctrl_cost
+            if ':Ant' in self.env.unwrapped.spec.entry_point:
+                # assumes self.env.unwrapped._exclude_current_positions_from_observation = False, include_cfrc_ext_in_observation = False, self._contact_cost_weight = 0
+                x_position_before = obs[...,[0]]
+                x_position_after = next_obs[...,[0]]
+                x_velocity = (x_position_after - x_position_before) / self.env.unwrapped.dt
+
+                state = next_obs
+                z = next_obs[...,[2]]
+                
+                min_z, max_z = self.env.unwrapped._healthy_z_range
+
+                healthy_z = torch.logical_and(min_z < z, z < max_z)
+                healthy_state = torch.all(torch.isfinite(state), dim=-1, keepdim=True)
+                is_healthy = torch.all(torch.concat([healthy_z, healthy_state], dim=-1), dim=-1, keepdim=True)
+
+                forward_reward = self.env.unwrapped._forward_reward_weight * x_velocity
+                healthy_reward = self.env.unwrapped._healthy_reward * is_healthy
+                ctrl_cost = self.env.unwrapped._ctrl_cost_weight * torch.sum(torch.square(action), dim=-1, keepdim=True)
+
+                return forward_reward + healthy_reward - ctrl_cost
 
 class ClassicMPPIWrapper(gymnasium.Wrapper):
     """environment used for MPPI rollouts for classic control environments"""
@@ -231,6 +283,24 @@ class MujocoMPPIWrapper(gymnasium.Wrapper):
             if self.env.unwrapped._exclude_current_positions_from_observation:
                 qpos = np.concatenate([extra['current_position'], observation[:self.n_qpos-1]])
                 qvel = observation[self.n_qpos-1:self.n_qpos-1+self.n_qvel]
+            else:
+                qpos = observation[:self.n_qpos]
+                qvel = observation[self.n_qpos:self.n_qpos+self.n_qvel]
+
+        if self.env_id == 'Walker2d-v5':
+            if self.env.unwrapped._exclude_current_positions_from_observation:
+                qpos = np.concatenate([extra['current_position'], observation[:self.n_qpos-1]])
+                # current velocity is clipped when getting observation
+                qvel = extra['current_velocity']
+            else:
+                qpos = observation[:self.n_qpos]
+                # current velocity is clipped when getting observation
+                qvel = extra['current_velocity']
+
+        if self.env_id == 'Ant-v5':
+            if self.env.unwrapped._exclude_current_positions_from_observation:
+                qpos = np.concatenate([extra['x_position'], extra['y_position'], observation[:self.n_qpos-2]])
+                qvel = observation[self.n_qpos-2:self.n_qpos-2+self.n_qvel]
             else:
                 qpos = observation[:self.n_qpos]
                 qvel = observation[self.n_qpos:self.n_qpos+self.n_qvel]

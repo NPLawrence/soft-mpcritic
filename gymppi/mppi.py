@@ -62,7 +62,7 @@ class MPPI():
         self.value = torch.zeros(self.B, 1)
 
     @torch.no_grad()
-    def make_step(self, observation, mode="action"):
+    def make_step(self, observation, mode="action", roll=True):
         """return action for given observation"""
         obs_tensor = torch.tensor(observation, dtype=self.dtype)
         if obs_tensor.ndim == 2:
@@ -73,8 +73,9 @@ class MPPI():
             raise ValueError(f"Expected observation shape [B,ns] or [B,1,ns], got {tuple(obs_tensor.shape)}")
 
         # initialize action sequence with previous solution
-        self.U = torch.roll(self.U, -1, dims=2)
-        self.U[:, :, -1] = self.u_init
+        if roll:
+            self.U = torch.roll(self.U, -1, dims=2)
+            self.U[:, :, -1] = self.u_init
         if self.control_mode == "mean_residual":
             self.mean_U = torch.mean(self.U, dim=2, keepdim=True)  # [B, 1, 1, nu]
             self.delta_U = self.U - self.mean_U
@@ -144,9 +145,11 @@ class MPPI():
         return action.numpy()
     
     @torch.no_grad()
-    def get_value(self, observation, U_init=None):
+    def get_value(self, observation, U_init=None, num_iters=1):
         self.reset(U_init)
         self.make_step(observation, mode='value')
+        for _ in range(num_iters-1):
+            self.make_step(observation, mode='value', roll=False)
         return self.value, self.U
 
     def _compute_rollout_costs_batched(self):
@@ -320,8 +323,10 @@ if __name__ == '__main__':
     import gymnasium as gym
     from env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
     env_id = "HalfCheetah-v5"
-    if any(s in env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Ant', 'Humanoid']):
+    if any(s in env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Humanoid']):
         env_kwargs = {'exclude_current_positions_from_observation': False}
+    elif 'Ant' in env_id:
+        env_kwargs = {'exclude_current_positions_from_observation': False, 'include_cfrc_ext_in_observation': False, 'contact_cost_weight': 0.}
     else:
         env_kwargs = {}
 
