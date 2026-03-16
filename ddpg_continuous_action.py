@@ -82,6 +82,8 @@ class Args:
     """use MPPI for Q-function targets"""
     mppi_target_warmstart: bool = True
     """warmstart MPPI for Q-function targets"""
+    mppi_target_iterations: int = 5
+    """number of MPPI iterations for Q-function iterations if not mppi_target_warmstart"""
     horizon: int = 1
     """length of MPPI rollouts/trajectories"""
     num_rollouts: int = 100
@@ -164,8 +166,10 @@ def train(args):
     # args = tyro.cli(Args)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
 
-    if any(s in args.env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Ant', 'Humanoid']):
+    if any(s in args.env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Humanoid']):
         env_kwargs = {'exclude_current_positions_from_observation': False}
+    elif 'Ant' in args.env_id:
+        env_kwargs = {'exclude_current_positions_from_observation': False, 'include_cfrc_ext_in_observation': False, 'contact_cost_weight': 0.}
     else:
         env_kwargs = {}
 
@@ -370,11 +374,11 @@ def train(args):
             with torch.no_grad():
                 if args.mppi and args.mppi_targets:
                     mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
-                    U_init = data.Us if args.mppi_target_warmstart else None
-
-                    # target_mppi.reset(U_init)
-                    # qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations)
-                    qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init)
+                    
+                    if args.mppi_target_warmstart:
+                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=data.Us)
+                    else:
+                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=None, num_iters=args.mppi_target_iterations)
 
                     rb.Us[batch_inds, env_indices, 1:] = next_Us[:,0,:-1] # copy over solution offset by 1 step
                     next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)
