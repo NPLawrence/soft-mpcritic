@@ -89,6 +89,8 @@ class Args:
     """number of MPPI iterations for Q-function iterations if not mppi_target_warmstart"""
     horizon: int = 1
     """length of MPPI rollouts/trajectories"""
+    target_horizon: Optional[int] = None
+    """length of MPPI target rollouts/trajectories; defaults to horizon when unset"""
     num_rollouts: int = 100
     """number of rollouts/trajectory samples for MPPI"""
     num_target_rollouts: int = 100
@@ -234,6 +236,9 @@ def train(args):
     transition_ensemble_size = args.horizon if args.transition_ensemble_size is None else args.transition_ensemble_size
     if transition_ensemble_size < 1:
         raise ValueError(f"transition_ensemble_size must be >= 1, got {transition_ensemble_size}.")
+    target_horizon = 1 if args.target_horizon is None else args.target_horizon
+    if target_horizon < 1:
+        raise ValueError(f"target_horizon must be >= 1, got {target_horizon}.")
 
     if args.mppi:
         Q = qf1 if args.Q_in_mppi else None
@@ -247,7 +252,7 @@ def train(args):
                         lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
+                                B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov)
         else:
             if transition_ensemble_size > 1:
@@ -306,7 +311,7 @@ def train(args):
                         lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
+                                B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov)
 
     rb = WarmstartReplayBuffer(
@@ -381,11 +386,11 @@ def train(args):
                     mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
                     
                     if args.mppi_target_warmstart:
-                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=data.Us)
+                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1])
                     else:
                         qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=None, num_iters=args.mppi_target_iterations)
 
-                    rb.Us[batch_inds, env_indices, 1:] = next_Us[:,0,:-1] # copy over solution offset by 1 step
+                    rb.Us[batch_inds, env_indices, 1:target_horizon+1] = next_Us[:,0,:target_horizon] # copy over solution offset by 1 step
                     next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)
                 else:
                     next_state_actions = target_actor(data.next_observations)
