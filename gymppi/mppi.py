@@ -9,7 +9,7 @@ from torch.distributions import MultivariateNormal
 
 
 class MPPI():
-    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, control_mode="default"):
+    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, control_mode="default", ensemble_rollout_mode="trajectory"):
         self.env = env
         self.rollout_envs = rollout_envs
         self.env_dtype = self.env.observation_space.dtype
@@ -26,9 +26,14 @@ class MPPI():
         self.mu = mu # controller (used only when control_mode == "mu")
 
         self.control_mode = control_mode
+        self.ensemble_rollout_mode = ensemble_rollout_mode
 
         if self.control_mode not in {"default", "mu", "integrator", "traj_integrator", "mean_residual", "warmstart_residual"}:
             raise ValueError(f"Invalid control_mode={self.control_mode}. Expected one of 'default', 'mu', 'integrator', 'traj_integrator', 'mean_residual', 'warmstart_residual'.")
+        if self.ensemble_rollout_mode not in {"trajectory", "batch"}:
+            raise ValueError(
+                f"Invalid ensemble_rollout_mode={self.ensemble_rollout_mode}. Expected one of 'trajectory', 'batch'."
+            )
 
         self.B = B # batch size
         self.K = K # number of trajectory samples
@@ -60,6 +65,7 @@ class MPPI():
         self.rollout_observations = None
         self.rollout_actions = None
         self.value = torch.zeros(self.B, 1)
+        self.rollout_model_indices = None
 
     @torch.no_grad()
     def make_step(self, observation, mode="action", roll=True):
@@ -90,6 +96,16 @@ class MPPI():
 
         if self.rollout_envs:
             self._sync_envs()
+
+        if self.transition_model is not None and hasattr(self.transition_model, "ensemble_size") and self.ensemble_rollout_mode == "trajectory":
+            if roll or self.rollout_model_indices is None:
+                self.rollout_model_indices = torch.randint(
+                    self.transition_model.ensemble_size,
+                    (self.B * self.K,),
+                    dtype=torch.long,
+                )
+        else:
+            self.rollout_model_indices = None
 
         # --- Fully batched path: vectorise over B × K ---
         rollout_cost = self._compute_rollout_costs_batched()  # [B, K]
@@ -286,7 +302,14 @@ class MPPI():
     def _step_rollout(self, observation, action):
         """step the trajectory forward with the appropriate dynamics and cost models or environments"""
         if self.transition_model is not None:
-            next_observations, rewards = self.transition_model(observation, action)
+            if self.rollout_model_indices is not None:
+                next_observations, rewards = self.transition_model(
+                    observation,
+                    action,
+                    model_indices=self.rollout_model_indices,
+                )
+            else:
+                next_observations, rewards = self.transition_model(observation, action)
             return next_observations.to(self.dtype), -rewards.flatten().to(self.dtype)
         else:
             action = action.view(self.B, self.K, self.nu)
@@ -318,6 +341,7 @@ class MPPI():
         self.rollout_observation = None
         self.rollout_observations = None
         self.rollout_actions = None
+        self.rollout_model_indices = None
 
 if __name__ == '__main__':
     import gymnasium as gym

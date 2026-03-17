@@ -3,21 +3,23 @@ from ddpg_continuous_action import Args, train
 if __name__ == "__main__":
     args = Args()
     args.wandb_entity = "mpcritic-dpc"
-    args.wandb_project_name = "dual_mpcritic_ddpg_union_ensemble"
+    args.wandb_project_name = "dual_mpcritic_ddpg_union_ensemble_unboundedQ"
     args.track = True
     args.save_model = True
     args.mppi = True
     args.env_in_mppi = False
     args.mppi_targets = True
-    args.num_rollouts = 100
-    args.batch_size = 32
+    args.num_rollouts = 200
+    args.batch_size = 64
     args.transition_network = "medium"
-    args.use_huber_loss = True
+    args.use_huber_loss = False
 
-    for env in ['HalfCheetah-v5', 'Hopper-v5', 'InvertedDoublePendulum-v5']:
+    args.ensemble_rollout_mode = "trajectory"
+
+    for env in ["Hopper-v5", "Walker2d-v5"]:
         if env == 'InvertedDoublePendulum-v5':
             args.total_timesteps = 50000
-        elif env == 'HalfCheetah-v5' or env == 'Hopper-v5':
+        elif env == 'Walker2d-v5' or env == 'Hopper-v5':
             args.total_timesteps = 500000
         elif env == 'Reacher-v5':
             args.total_timesteps = 50000
@@ -26,7 +28,7 @@ if __name__ == "__main__":
             args.horizon = horizon
             for seed in range(3):
                 args.seed = seed
-                for transition_ensemble_size in [None, 1]:
+                for transition_ensemble_size in [None]:
                     args.transition_ensemble_size = transition_ensemble_size
                     
 

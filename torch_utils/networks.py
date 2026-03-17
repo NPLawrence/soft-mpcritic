@@ -100,7 +100,24 @@ class EnsembleDynamicsModel(nn.Module):
             [_build_transition_model(env, network_size) for _ in range(ensemble_size)]
         )
 
-    def forward(self, x, u):
-        # Randomized model selection makes the ensemble directly usable by MPPI.
+    def forward(self, x, u, model_indices=None):
+        if model_indices is not None:
+            if model_indices.shape[0] != x.shape[0]:
+                raise ValueError(
+                    f"model_indices must have shape ({x.shape[0]},), got {tuple(model_indices.shape)}."
+                )
+            model_indices = model_indices.to(device=x.device, dtype=torch.long)
+            x_next = torch.empty_like(x)
+            reward = None
+            for model_idx in torch.unique(model_indices).tolist():
+                mask = model_indices == model_idx
+                member_x_next, member_reward = self.models[model_idx](x[mask], u[mask])
+                x_next[mask] = member_x_next
+                if reward is None:
+                    reward_shape = (x.shape[0],) + tuple(member_reward.shape[1:])
+                    reward = torch.empty(reward_shape, device=member_reward.device, dtype=member_reward.dtype)
+                reward[mask] = member_reward
+            return x_next, reward
+
         model_idx = torch.randint(self.ensemble_size, (1,), device=x.device).item()
         return self.models[model_idx](x, u)

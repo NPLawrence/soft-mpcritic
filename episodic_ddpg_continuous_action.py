@@ -100,6 +100,8 @@ class Args:
     """size/type of transition model network"""
     transition_ensemble_size: Optional[int] = None
     """number of transition models in the ensemble; defaults to horizon when unset"""
+    ensemble_rollout_mode: str = "trajectory"
+    """ensemble rollout mode for MPPI: one of {'trajectory', 'batch'}"""
     transition_batch_size: int = 32
     """batch size for transition model updates"""
     use_huber_loss: bool = False
@@ -226,16 +228,20 @@ def train(args):
         Q = qf1 if args.Q_in_mppi else None
         if args.mppi_control_mode not in {"default", "mu", "integrator", "mean_residual", "warmstart_residual"}:
             raise ValueError(f"Invalid mppi_control_mode={args.mppi_control_mode}. Expected one of 'default', 'mu', 'integrator', 'mean_residual', 'warmstart_residual'.")
+        if args.ensemble_rollout_mode not in {"trajectory", "batch"}:
+            raise ValueError(
+                f"Invalid ensemble_rollout_mode={args.ensemble_rollout_mode}. Expected one of 'trajectory', 'batch'."
+            )
         cov = args.var*torch.diag(torch.ones(np.prod(envs.single_action_space.shape), dtype=torch.float32))
 
         if args.env_in_mppi:
             mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs[0:1], gamma=args.gamma, Q=Q, mu=actor,
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
-                        lambda_=args.lambda_, cov=cov)
+                        lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
                                 B=args.batch_size, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
-                                lambda_=args.lambda_, cov=cov)
+                                lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
         else:
             if transition_ensemble_size > 1:
                 transition_model = EnsembleDynamicsModel(
@@ -290,11 +296,11 @@ def train(args):
 
             mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
-                        lambda_=args.lambda_, cov=cov)
+                        lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
                                 B=args.batch_size, T=args.horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
-                                lambda_=args.lambda_, cov=cov)
+                                lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
 
     rb = WarmstartReplayBuffer(
         args.buffer_size,
