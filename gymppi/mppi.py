@@ -118,7 +118,8 @@ class MPPI():
         # action_cost: [B, K, T+1, nu]; perturbation_cost: [B, K]
         action_cost = self.lambda_ * self.noise @ self.inv_cov
         perturbation_cost = torch.sum(
-            self.discounting.view(1, 1, -1, 1) * perturbation_base * action_cost,
+            # self.discounting.view(1, 1, -1, 1) * perturbation_base * action_cost,
+            perturbation_base * action_cost,
             dim=(2, 3),
         )  # [B, K]
 
@@ -129,10 +130,11 @@ class MPPI():
         cost_total_non_zero = torch.exp(-(1.0 / self.lambda_) * (cost_total - beta))  # [B, K]
 
         if mode == 'value':
-            logmeanexp = torch.log(torch.mean(cost_total_non_zero, dim=1))           # [B]
-            term1 = -self.lambda_ * (-beta.squeeze(1) / self.lambda_ + logmeanexp)
+            logsumexp = torch.log(torch.sum(cost_total_non_zero, dim=1))           # [B]
+            term1 = -self.lambda_ * (-beta.squeeze(1) / self.lambda_ + logsumexp)
             term2 = self.lambda_ / 2 * torch.sum(
-                self.discounting.view(1, 1, -1, 1) * perturbation_base * (perturbation_base @ self.inv_cov),
+                # self.discounting.view(1, 1, -1, 1) * perturbation_base * (perturbation_base @ self.inv_cov),
+                perturbation_base * (perturbation_base @ self.inv_cov),
                 dim=(1, 2, 3),
             )  # [B]
             self.value = -(term1 + term2).unsqueeze(1)  # [B, 1]
