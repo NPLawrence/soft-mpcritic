@@ -105,7 +105,7 @@ class Args:
     """size/type of transition model network"""
     transition_ensemble_size: Optional[int] = None
     """number of transition models in the ensemble; defaults to horizon when unset"""
-    ensemble_rollout_mode: str = "trajectory"
+    ensemble_rollout_mode: str = "batch"
     """ensemble rollout mode for MPPI: one of {'trajectory', 'batch'}"""
     transition_batch_size: int = 32
     """batch size for transition model updates"""

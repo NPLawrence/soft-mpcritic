@@ -14,7 +14,7 @@ if __name__ == "__main__":
     args.transition_network = "medium"
     args.use_huber_loss = False
 
-    args.ensemble_rollout_mode = "trajectory"
+    args.ensemble_rollout_mode = "batch"
 
     for env in ["Hopper-v5", "Walker2d-v5"]:
         if env == 'InvertedDoublePendulum-v5':
@@ -28,7 +28,7 @@ if __name__ == "__main__":
             args.horizon = horizon
             for seed in range(3):
                 args.seed = seed
-                for transition_ensemble_size in [None]:
+                for transition_ensemble_size in [None, 1]:
                     args.transition_ensemble_size = transition_ensemble_size
                     
 
