@@ -3,20 +3,41 @@ from ddpg_continuous_action import Args, train
 if __name__ == "__main__":
     args = Args()
     args.wandb_entity = "mpcritic-dpc"
-    args.wandb_project_name = "dual_mpcritic_ddpg_new_value"
+    args.wandb_project_name = "dual_mpcritic_ddpg_new_value_with_discount"
     args.track = True
     args.save_model = True
     args.var = 0.1
     args.mppi = True
     args.mppi_targets = True
-    args.num_target_rollouts = 10
     args.env_in_mppi = False
-    args.num_rollouts = 100
+    args.num_rollouts = 200
     args.horizon = 4
     args.target_horizon = 4
     
+    # # tommy run
+    # args.env_id = "InvertedDoublePendulum-v5"
+    # args.total_timesteps = 50000
+    # args.num_target_rollouts = 10
+    # for seed in range(5):
+    #     args.seed = seed
+    #     for transition_network in ["medium"]:
+    #         args.transition_network = transition_network
+    #         for transition_ensemble_size in [None, 1]:
+    #             args.transition_ensemble_size = transition_ensemble_size
+    #             for mppi_target_warmstart in [True, False]:    
+    #                 args.mppi_target_warmstart = mppi_target_warmstart
+    #                 if not args.mppi_target_warmstart:
+    #                     for mppi_target_iterations in [1,5]:
+    #                         args.mppi_target_iterations = mppi_target_iterations
+    #                         train(args)
+    #                 else:
+    #                     args.mppi_target_iterations = 5
+    #                     run_name = train(args)
+
+    # nathan run
     args.env_id = "InvertedDoublePendulum-v5"
     args.total_timesteps = 50000
+    args.num_target_rollouts = 20
     for seed in range(5):
         args.seed = seed
         for transition_network in ["medium"]:
@@ -26,7 +47,7 @@ if __name__ == "__main__":
                 for mppi_target_warmstart in [True, False]:    
                     args.mppi_target_warmstart = mppi_target_warmstart
                     if not args.mppi_target_warmstart:
-                        for mppi_target_iterations in [1,5,10]:
+                        for mppi_target_iterations in [1,5]:
                             args.mppi_target_iterations = mppi_target_iterations
                             train(args)
                     else:
