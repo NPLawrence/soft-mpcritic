@@ -21,4 +21,5 @@ dependencies = [
     "mujoco>=2.3.3",
     "stable-baselines3>=2.7.1",
     "gymnasium>0.29.1",
+    "seaborn>=0.13.2",
 ]

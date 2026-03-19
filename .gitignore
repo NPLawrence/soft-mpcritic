@@ -185,3 +185,7 @@ cython_debug/
 .DS_Store
 runs/
 wandb/
+graphic/
+data/
+*.png
+*.pdf
