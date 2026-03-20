@@ -164,6 +164,7 @@ class FlexEnsembleDynamicsModel(nn.Module):
         if ensemble_size < 1:
             raise ValueError(f"ensemble_size must be >= 1, got {ensemble_size}.")
         
+        self.ensemble_size = ensemble_size
         if num_hidden_list is None:
             num_hidden_list = [np.random.choice([2,3,4]) for _ in range(ensemble_size)]
         if num_nodes_list is None:
