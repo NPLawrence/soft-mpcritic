@@ -9,8 +9,9 @@ runs_df = pd.read_pickle(f"data/{project}_all_data.pkl")
 print(runs_df['episodic_return'].iloc[0])
 
 data_env = runs_df[(runs_df['env_id']=='InvertedDoublePendulum-v5')]
-data_target_h1 = data_env[(data_env['target_horizon']==1)]
-data_target_h4 = data_env[(data_env['target_horizon']==4)]
+data_target_r20 = data_env[(data_env['num_target_rollouts']==20)]
+data_target_h1 = data_target_r20[(data_target_r20['target_horizon']==1)]
+data_target_h4 = data_target_r20[(data_target_r20['target_horizon']==4)]
 data = pd.concat([data_target_h4], ignore_index=True)
 # data = pd.concat([data_target_h4.sample(n=20)], ignore_index=True)
 

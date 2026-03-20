@@ -18,7 +18,7 @@ from gymppi.mppi import MPPI
 
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP_small, JointMLP_medium, JointMLP_large, EnsembleDynamicsModel
+from torch_utils.networks import JointMLP_small, JointMLP_medium, JointMLP_large, EnsembleDynamicsModel, FlexEnsembleDynamicsModel
 from torch_utils.trainer import Trainer, Trainer_ValueAligned, EnsembleTrainer
 
 @dataclass
@@ -107,6 +107,16 @@ class Args:
     """size/type of transition model network"""
     transition_ensemble_size: Optional[int] = None
     """number of transition models in the ensemble; defaults to horizon when unset"""
+    num_hidden_list: Optional[list] = None
+    """number of hidden layers in each network of the ensemble,
+       (e.g. [2,3,4] for transition_ensemble_size=3); defaults to random choice when unset"""
+    num_nodes_list: Optional[list] = None
+    """number of nodes in hidden layers of each network of the ensemble,
+       (e.g. [128,256,512] for transition_ensemble_size=3); defaults to random choice when unset"""
+    activations_list: Optional[list] = None
+    """activation function for each hidden layer of each network of the ensemble,
+       (e.g. [['relu'],['relu','relu']]] for num_hidden_list=[1,2])
+        or 'relu' to apply to every network and layer); defaults to random choice when unset"""
     ensemble_rollout_mode: str = "batch"
     """ensemble rollout mode for MPPI: one of {'trajectory', 'batch'}"""
     transition_batch_size: int = 32
@@ -262,15 +272,28 @@ def train(args):
                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
         else:
             if transition_ensemble_size > 1:
-                transition_model = EnsembleDynamicsModel(
-                    env=envs.envs[0],
-                    ensemble_size=transition_ensemble_size,
-                    network_size=args.transition_network,
-                )
-                if args.value_aligned_model_loss:
-                    raise ValueError(
-                        "value_aligned_model_loss is not supported with transition_ensemble_size > 1."
+                if args.transition_network == 'flex':
+                    transition_model = FlexEnsembleDynamicsModel(
+                        env=envs.envs[0],
+                        ensemble_size=transition_ensemble_size,
+                        num_hidden_list=args.num_hidden_list,
+                        num_nodes_list=args.num_nodes_list,
+                        activations_list=args.activations_list
                     )
+                    if args.value_aligned_model_loss:
+                        raise ValueError(
+                            "value_aligned_model_loss is not supported with transition_ensemble_size > 1."
+                        )
+                else:
+                    transition_model = EnsembleDynamicsModel(
+                        env=envs.envs[0],
+                        ensemble_size=transition_ensemble_size,
+                        network_size=args.transition_network,
+                    )
+                    if args.value_aligned_model_loss:
+                        raise ValueError(
+                            "value_aligned_model_loss is not supported with transition_ensemble_size > 1."
+                        )
                 transition_trainer = EnsembleTrainer(
                     transition_model,
                     Adam,
