@@ -29,8 +29,8 @@ def padded_moving_average(df, columns, window=20, total_len=50_001):
 
                 repeated_steps  = np.arange(total_len)
 
-                df.at[i, 'global_step'] = repeated_steps
-                df.at[i, column] = repeated_values
+                df.at[i, 'global_step'] = repeated_steps[::window]
+                df.at[i, column] = repeated_values[::window]
     return df
 
 data = padded_moving_average(data, ['episodic_return'])
@@ -45,7 +45,7 @@ hue = 'mppi_target_iterations'
 
 sns.set(palette='Set2', style='ticks')
 
-SMALL_SIZE = 12
+SMALL_SIZE = 8
 MEDIUM_SIZE = 12
 BIGGER_SIZE = 16
 
@@ -55,7 +55,7 @@ plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
 plt.rc('xtick', labelsize=SMALL_SIZE)    #  fontsize of the tick labels
 plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
 plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
-plt.rc('figure', titlesize=SMALL_SIZE)  # fontsize of the figure title
+plt.rc('legend', title_fontsize=SMALL_SIZE, fontsize=SMALL_SIZE)  # fontsize of the figure title
 plt.rc('lines', linewidth=2.5)
 
 params = {
@@ -77,22 +77,20 @@ lineplot_kwargs = {
     "alpha" : 1.0
 }
 
-# compute a moving median/average (and percentiles/std of that) over seeds of shared parameters???
-
-g = sns.FacetGrid(df_long, col="mppi_target_warmstart", row="transition_ensemble_size", margin_titles=True, despine=False, legend_out=False)
+g = sns.FacetGrid(df_long, col="mppi_target_warmstart", row="transition_ensemble_size", margin_titles=True, despine=False, legend_out=False, height=1.75, aspect=1)
 # g.fig.set_constrained_layout(True)
 g.map_dataframe(sns.lineplot, **lineplot_kwargs)
-g.set_axis_labels("Time step", "Cumulative reward")
-g.set_titles(col_template="{col_name} start targets", row_template="{row_name} dynamics model")
+g.set_axis_labels("Time step", "Reward")
+g.set_titles(col_template="{col_name} start", row_template=r"{row_name} $f$", size=SMALL_SIZE)
 g.tight_layout() # call before making legend outside
 g.add_legend()
-sns.move_legend(g, "lower center", title="MPPI target iterations", bbox_to_anchor=(0.5, 0.98), frameon=False, ncol=3)
+sns.move_legend(g, "lower center", title="MPPI target iterations", bbox_to_anchor=(0.5, 0.95), frameon=False, ncol=3)
 
 # handles, labels = ax.get_legend_handles_labels()
 # ax.legend(handles=handles, labels=['Vanilla', 'MPCritic'], title=None)
 # sns.move_legend(ax, "lower center", title=None, bbox_to_anchor=(0.5, 1), ncol=2)
 
 # plt.tick_params(axis='both', which='major', top=True, right=True, bottom=True, left=True, length=5, width=1)
-
+g.tight_layout(h_pad=0.5) # need this to squeeze plots together
 plt.savefig('plotting/dip_eval.png', bbox_inches='tight')
 plt.savefig('plotting/dip_eval.pdf', bbox_inches='tight')
