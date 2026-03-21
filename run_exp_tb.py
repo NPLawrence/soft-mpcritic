@@ -12,7 +12,7 @@ if __name__ == "__main__":
     args.env_in_mppi = False
     args.num_rollouts = 200
     args.horizon = 4
-    args.target_horizon = 4
+    # args.target_horizon = 4
     args.num_target_rollouts = 20
     args.transition_network = "medium"
     
@@ -39,25 +39,13 @@ if __name__ == "__main__":
     #                     args.target_horizon = 4
     #                     run_name = train(args)
 
-    # Hopper
-    # args.env_id = "Hopper-v5"
-    # args.total_timesteps = 500000
-    # args.transition_ensemble_size = None
-    # args.mppi_target_warmstart = True
-    # for seed in range(10):
-    #     args.seed = seed
-    #     for target_horizon in [1,4]:
-    #         args.target_horizon = target_horizon
-    #         train(args)
-
-
-    args.env_id = "Ant-v5"
+    args.env_id = "Hopper-v5"
     args.total_timesteps = 500000
-    args.transition_ensemble_size = None
+    args.transition_ensemble_size = 1
     args.mppi_target_warmstart = True
 
-    # args.target_horizon = 4
-    args.target_horizon = 1
-    for seed in range(10):
-        args.seed = seed
+    args.target_horizon = 4
+    # args.target_horizon = 1
+    for seed in range(4):
+        args.seed = seed+6
         train(args)

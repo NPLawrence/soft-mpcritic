@@ -123,6 +123,8 @@ def train(args):
 
     if any(s in args.env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Ant', 'Humanoid']):
         env_kwargs = {'exclude_current_positions_from_observation': False}
+    elif 'Ant' in args.env_id:
+        env_kwargs = {'exclude_current_positions_from_observation': False, 'include_cfrc_ext_in_observation': False, 'contact_cost_weight': 0.}
     else:
         env_kwargs = {}
 
