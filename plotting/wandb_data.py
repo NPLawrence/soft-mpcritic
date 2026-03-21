@@ -11,6 +11,11 @@ runs = api.runs(f"mpcritic-dpc/{project}")
 # summary_list, config_list, name_list = [], [], []
 run_name_list = []
 env_id_list = []
+mppi_online_list = []
+Q_in_mppi_list = []
+num_rollouts_list = []
+horizon_list = []
+mppi_targets_list = []
 num_target_rollouts_list = []
 target_horizon_list = []
 transition_ensemble_size_list = []
@@ -22,6 +27,11 @@ sps_list = []
 dataset = {
     "run_name": run_name_list,
     "env_id": env_id_list,
+    "mppi_online": mppi_online_list,
+    "Q_in_mppi": Q_in_mppi_list,
+    "num_rollouts": num_rollouts_list,
+    "horizon": horizon_list,
+    "mppi_targets": mppi_targets_list,
     "num_target_rollouts": num_target_rollouts_list,
     "target_horizon": target_horizon_list,
     "transition_ensemble_size": transition_ensemble_size_list,
@@ -44,6 +54,11 @@ for (i, run) in enumerate(runs):
 
         run_name_list.append(run.name)
         env_id_list.append(config['env_id'])
+        mppi_online_list.append(config['mppi_online'])
+        Q_in_mppi_list.append(config['Q_in_mppi'])
+        num_rollouts_list.append(config['num_rollouts'])
+        horizon_list.append(config['horizon'])
+        mppi_targets_list.append(config['mppi_targets'])
         num_target_rollouts_list.append(config['num_target_rollouts'])
         target_horizon_list.append(config['target_horizon'])
         transition_ensemble_size_list.append(config['transition_ensemble_size'])
