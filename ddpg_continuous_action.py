@@ -18,7 +18,7 @@ from gymppi.mppi import MPPI
 
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP_small, JointMLP_medium, JointMLP_large, EnsembleDynamicsModel, FlexEnsembleDynamicsModel
+from torch_utils.networks import JointMLP_small, JointMLP_medium, JointMLP_large, JointMLP_deep, EnsembleDynamicsModel, FlexEnsembleDynamicsModel
 from torch_utils.trainer import Trainer, Trainer_ValueAligned, EnsembleTrainer
 
 @dataclass
@@ -102,6 +102,8 @@ class Args:
     vectorization_mode: str = 'sync'
     """vectorization mode for gymnasium mppi rollouts"""
     transition_utd: int = 2
+    """the frequency of training the transition model"""
+    pretrain: bool = False
     """the frequency of training the transition model"""
     transition_network: str = 'small'
     """size/type of transition model network"""
@@ -308,9 +310,11 @@ def train(args):
                     transition_model = JointMLP_medium(env=envs.envs[0])
                 elif args.transition_network == 'large':
                     transition_model = JointMLP_large(env=envs.envs[0])
+                elif args.transition_network == 'deep':
+                    transition_model = JointMLP_deep(env=envs.envs[0])
                 else:
                     raise ValueError(
-                        f"Unknown transition_network={args.transition_network}. Expected one of 'small', 'medium', 'large'."
+                        f"Unknown transition_network={args.transition_network}. Expected one of 'small', 'medium', 'large', 'deep'."
                     )
 
                 if args.value_aligned_model_loss:
@@ -402,7 +406,7 @@ def train(args):
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
 
-        if global_step == args.learning_starts and args.mppi and not args.env_in_mppi:
+        if global_step == args.learning_starts and args.mppi and not args.env_in_mppi and args.pretrain:
             for _ in range(int(args.learning_starts*args.transition_utd)):
                 data, _, _ = rb.sample(args.batch_size)
                 dynamics_loss, reward_loss = transition_trainer.update(data)
