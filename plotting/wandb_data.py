@@ -5,7 +5,7 @@ import wandb
 api = wandb.Api()
 
 # Project is specified by <entity/project-name>
-project = 'dual_mpcritic_ddpg_new_value_with_discount'
+project = 'dual_mpcritic_ddpg_sps' # 'dual_mpcritic_ddpg_new_value_with_discount'
 runs = api.runs(f"mpcritic-dpc/{project}")
 
 # summary_list, config_list, name_list = [], [], []

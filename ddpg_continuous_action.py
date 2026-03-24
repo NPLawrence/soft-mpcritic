@@ -81,11 +81,13 @@ class Args:
     """use Q-function as MPPI terminal cost"""
     mppi_online: bool = True
     """use MPPI for online control"""
+    mppi_online_iterations: int = 1
+    """number of MPPI iterations for Q-function iterations if not mppi_target_warmstart"""
     mppi_targets: bool = True
     """use MPPI for Q-function targets"""
     mppi_target_warmstart: bool = True
     """warmstart MPPI for Q-function targets"""
-    mppi_target_iterations: int = 5
+    mppi_target_iterations: Optional[int] = None
     """number of MPPI iterations for Q-function iterations if not mppi_target_warmstart"""
     horizon: int = 1
     """length of MPPI rollouts/trajectories"""
@@ -253,6 +255,9 @@ def train(args):
     target_horizon = 1 if args.target_horizon is None else args.target_horizon
     if target_horizon < 1:
         raise ValueError(f"target_horizon must be >= 1, got {target_horizon}.")
+    mppi_target_iterations = args.mppi_online_iterations if args.mppi_target_iterations is None else args.mppi_target_iterations
+    if mppi_target_iterations < 1:
+        raise ValueError(f"mppi_target_iterations must be >= 1, got {mppi_target_iterations}.")
 
     if args.mppi:
         Q = qf1 if args.Q_in_mppi else None
@@ -375,7 +380,8 @@ def train(args):
                     Us = np.empty([1, args.horizon+1] + list(envs.single_action_space.shape))
                 else:
                     # ensure obs is shape of B x S, assumes B=1
-                    actions = mppi.make_step(obs.reshape(1, -1))[0]
+                    # actions = mppi.make_step(obs.reshape(1, -1))[0]
+                    actions = mppi.get_action(obs.reshape(1, -1), num_iters=args.mppi_online_iterations)[0]
                     Us = mppi.U[0].cpu().numpy()
 
         # TRY NOT TO MODIFY: execute the game and log data.
@@ -419,9 +425,9 @@ def train(args):
                     mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
                     
                     if args.mppi_target_warmstart:
-                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1])
+                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
                     else:
-                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=None, num_iters=args.mppi_target_iterations)
+                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=None, num_iters=mppi_target_iterations)
 
                     rb.Us[batch_inds, env_indices, 1:target_horizon+1] = next_Us[:,0,:target_horizon] # copy over solution offset by 1 step
                     next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)

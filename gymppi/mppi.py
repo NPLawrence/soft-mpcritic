@@ -161,7 +161,14 @@ class MPPI():
         self.last_action = action
 
         return action.numpy()
-    
+
+    @torch.no_grad()
+    def get_action(self, observation, num_iters=1):
+        action = self.make_step(observation, mode='action')
+        for _ in range(num_iters-1):
+            action = self.make_step(observation, mode='action', roll=False)
+        return action
+
     @torch.no_grad()
     def get_value(self, observation, U_init=None, num_iters=1):
         self.reset(U_init)
