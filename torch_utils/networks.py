@@ -7,6 +7,8 @@ from torch.nn import functional as F
 def _build_transition_model(env, network_size):
     if network_size == "small":
         return JointMLP_small(env=env)
+    if network_size == "small_deep":
+        return JointMLP_small_deep(env=env)
     if network_size == "medium":
         return JointMLP_medium(env=env)
     if network_size == "large":
@@ -14,7 +16,7 @@ def _build_transition_model(env, network_size):
     if network_size == "deep":
         return JointMLP_deep(env=env)
     raise ValueError(
-        f"Unknown network_size={network_size}. Expected one of 'small', 'medium', 'large', 'deep'."
+        f"Unknown network_size={network_size}. Expected one of 'small', 'small_deep', 'medium', 'large', 'deep'."
     )
 
 activation_map = {
@@ -23,6 +25,32 @@ activation_map = {
     'tanh': nn.Tanh,
 }
 
+class JointMLP_small_deep(nn.Module):
+    def __init__(self, env):
+        super().__init__()
+        self.nx = np.prod(env.observation_space.shape)
+        self.nu = np.prod(env.action_space.shape)
+        self.get_torch_reward = env.get_wrapper_attr('get_torch_reward')
+        self.reward_bounds = env.get_wrapper_attr('reward_bounds')
+        self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
+        self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
+
+        self.fc1 = nn.Linear(self.nx + self.nu, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, 64)
+        self.fc4 = nn.Linear(64, self.nx)
+
+    def forward(self, x, u):
+        z = torch.cat([x, u], 1)
+        y = F.silu(self.fc1(z))
+        y = F.silu(self.fc2(y))
+        y = F.silu(self.fc3(y))
+        dx = self.fc4(y)
+        x_next = x + dx
+        with torch.no_grad():
+            reward = self.get_torch_reward(x, u, x_next)
+        return x_next, reward
+    
 class JointMLP_small(nn.Module):
     def __init__(self, env):
         super().__init__()

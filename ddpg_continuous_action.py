@@ -18,7 +18,7 @@ from gymppi.mppi import MPPI
 
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP_small, JointMLP_medium, JointMLP_large, JointMLP_deep, EnsembleDynamicsModel, FlexEnsembleDynamicsModel
+from torch_utils.networks import JointMLP_small, JointMLP_small_deep, JointMLP_medium, JointMLP_large, JointMLP_deep, EnsembleDynamicsModel, FlexEnsembleDynamicsModel
 from torch_utils.trainer import Trainer, Trainer_ValueAligned, EnsembleTrainer
 
 @dataclass
@@ -311,6 +311,8 @@ def train(args):
             else:
                 if args.transition_network == 'small':
                     transition_model = JointMLP_small(env=envs.envs[0])
+                elif args.transition_network == 'small_deep':
+                    transition_model = JointMLP_small_deep(env=envs.envs[0])
                 elif args.transition_network == 'medium':
                     transition_model = JointMLP_medium(env=envs.envs[0])
                 elif args.transition_network == 'large':
@@ -319,7 +321,7 @@ def train(args):
                     transition_model = JointMLP_deep(env=envs.envs[0])
                 else:
                     raise ValueError(
-                        f"Unknown transition_network={args.transition_network}. Expected one of 'small', 'medium', 'large', 'deep'."
+                        f"Unknown transition_network={args.transition_network}. Expected one of 'small', 'small_deep', 'medium', 'large', 'deep'."
                     )
 
                 if args.value_aligned_model_loss:
