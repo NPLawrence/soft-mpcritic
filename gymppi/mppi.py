@@ -380,10 +380,19 @@ if __name__ == '__main__':
         # value = mppi.get_value(belief)
         # action = env.action_space.sample().reshape([1,1,-1])
             
-        obs, reward, _, _, info = env.step(action[0,0])
+        next_obs, reward, _, _, info = env.step(action[0,0])
+
+        s, a, s_ = map(torch.from_numpy, [obs, action, next_obs])
+        r = env.get_torch_reward(s, a ,s_)
+        rew = torch.tensor([reward], dtype=torch.float32)
+
+        print(torch.isclose(r, rew))
+
         cumulative_reward += reward
-        print(reward)
+        # print(reward)
         env.render()
+
+        obs = next_obs
 
     print("Cumulative reward:", cumulative_reward)
     env.close()

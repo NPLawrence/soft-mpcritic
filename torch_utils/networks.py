@@ -11,8 +11,10 @@ def _build_transition_model(env, network_size):
         return JointMLP_medium(env=env)
     if network_size == "large":
         return JointMLP_large(env=env)
+    if network_size == "deep":
+        return JointMLP_deep(env=env)
     raise ValueError(
-        f"Unknown network_size={network_size}. Expected one of 'small', 'medium', 'large'."
+        f"Unknown network_size={network_size}. Expected one of 'small', 'medium', 'large', 'deep'."
     )
 
 activation_map = {
@@ -93,6 +95,33 @@ class JointMLP_large(nn.Module):
             reward = self.get_torch_reward(x, u, x_next)
         return x_next, reward
 
+class JointMLP_deep(nn.Module):
+    def __init__(self, env):
+        super().__init__()
+        self.nx = np.prod(env.observation_space.shape)
+        self.nu = np.prod(env.action_space.shape)
+        self.get_torch_reward = env.get_wrapper_attr('get_torch_reward')
+        self.reward_bounds = env.get_wrapper_attr('reward_bounds')
+        self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
+        self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
+
+        self.fc1 = nn.Linear(self.nx + self.nu, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc3 = nn.Linear(256, 256)
+        self.fc4 = nn.Linear(256, 256)
+        self.fc5 = nn.Linear(256, self.nx)
+
+    def forward(self, x, u):
+        z = torch.cat([x, u], 1)
+        y = F.silu(self.fc1(z))
+        y = F.silu(self.fc2(y))
+        y = F.silu(self.fc3(y))
+        y = F.silu(self.fc4(y))
+        dx = self.fc5(y)
+        x_next = x + dx
+        with torch.no_grad():
+            reward = self.get_torch_reward(x, u, x_next)
+        return x_next, reward
 
 class EnsembleDynamicsModel(nn.Module):
     def __init__(self, env, ensemble_size=5, network_size="small"):
@@ -174,9 +203,9 @@ class FlexEnsembleDynamicsModel(nn.Module):
                 [np.random.choice([nn.ReLU, nn.SiLU, nn.Tanh])() for _ in range(num_hidden_list[i])]
                 for i in range(ensemble_size)
             ]
-        elif activations_list in activation_map.keys():
+        elif activations_list[0][0] in activation_map.keys():
             activations_list = [
-                [activation_map[activations_list]() for _ in range(num_hidden_list[i])]
+                [activation_map[activations_list[i][j]]() for j in range(num_hidden_list[i])]
                 for i in range(ensemble_size)
             ]
         else:
