@@ -11,12 +11,14 @@ def _build_transition_model(env, network_size):
         return JointMLP_small_deep(env=env)
     if network_size == "medium":
         return JointMLP_medium(env=env)
+    if network_size == "medium_deep":
+        return JointMLP_medium_deep(env=env)
     if network_size == "large":
         return JointMLP_large(env=env)
     if network_size == "deep":
         return JointMLP_deep(env=env)
     raise ValueError(
-        f"Unknown network_size={network_size}. Expected one of 'small', 'small_deep', 'medium', 'large', 'deep'."
+        f"Unknown network_size={network_size}. Expected one of 'small', 'small_deep', 'medium', 'medium_deep', 'large', 'deep'."
     )
 
 activation_map = {
@@ -39,6 +41,32 @@ class JointMLP_small_deep(nn.Module):
         self.fc2 = nn.Linear(64, 64)
         self.fc3 = nn.Linear(64, 64)
         self.fc4 = nn.Linear(64, self.nx)
+
+    def forward(self, x, u):
+        z = torch.cat([x, u], 1)
+        y = F.silu(self.fc1(z))
+        y = F.silu(self.fc2(y))
+        y = F.silu(self.fc3(y))
+        dx = self.fc4(y)
+        x_next = x + dx
+        with torch.no_grad():
+            reward = self.get_torch_reward(x, u, x_next)
+        return x_next, reward
+
+class JointMLP_medium_deep(nn.Module):
+    def __init__(self, env):
+        super().__init__()
+        self.nx = np.prod(env.observation_space.shape)
+        self.nu = np.prod(env.action_space.shape)
+        self.get_torch_reward = env.get_wrapper_attr('get_torch_reward')
+        self.reward_bounds = env.get_wrapper_attr('reward_bounds')
+        self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
+        self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
+
+        self.fc1 = nn.Linear(self.nx + self.nu, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc3 = nn.Linear(256, 256)
+        self.fc4 = nn.Linear(256, self.nx)
 
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
@@ -223,9 +251,9 @@ class FlexEnsembleDynamicsModel(nn.Module):
         
         self.ensemble_size = ensemble_size
         if num_hidden_list is None:
-            num_hidden_list = [np.random.choice([2,3,4]) for _ in range(ensemble_size)]
+            num_hidden_list = [np.random.choice([2,3]) for _ in range(ensemble_size)]
         if num_nodes_list is None:
-            num_nodes_list = [np.random.choice([128,256,512]) for _ in range(ensemble_size)]
+            num_nodes_list = [np.random.choice([64,128,256]) for _ in range(ensemble_size)]
         if activations_list is None:
             activations_list = [
                 [np.random.choice([nn.ReLU, nn.SiLU, nn.Tanh])() for _ in range(num_hidden_list[i])]

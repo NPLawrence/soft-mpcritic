@@ -18,8 +18,10 @@ from gymppi.mppi import MPPI
 
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP_small, JointMLP_small_deep, JointMLP_medium, JointMLP_large, JointMLP_deep, EnsembleDynamicsModel, FlexEnsembleDynamicsModel
+from torch_utils.networks import JointMLP_small, JointMLP_small_deep, JointMLP_medium_deep, JointMLP_medium, JointMLP_large, JointMLP_deep, EnsembleDynamicsModel, FlexEnsembleDynamicsModel
 from torch_utils.trainer import Trainer, Trainer_ValueAligned, EnsembleTrainer
+
+from torch_utils.soap import SOAP
 
 @dataclass
 class Args:
@@ -132,6 +134,8 @@ class Args:
     value_aligned_model_loss: bool = False
     """if True, use value function to formulate cross-entropy model loss---otherwise use simple regression via `use_huber_loss`"""
     temp_model_loss: str = "bce_exp"
+    model_optimizer: str = "adam"
+    """the optimizer class for training the transition model, one of 'adam', 'soap'"""
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
     def thunk():
@@ -278,6 +282,7 @@ def train(args):
                                 B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
         else:
+            transition_optimizer = Adam if args.model_optimizer == "adam" else SOAP
             if transition_ensemble_size > 1:
                 if args.transition_network == 'flex':
                     transition_model = FlexEnsembleDynamicsModel(
@@ -303,7 +308,7 @@ def train(args):
                         )
                 transition_trainer = EnsembleTrainer(
                     transition_model,
-                    Adam,
+                    transition_optimizer,
                     lr=args.learning_rate,
                     model_loss=model_loss,
                     huber_delta=args.huber_delta,
@@ -315,13 +320,15 @@ def train(args):
                     transition_model = JointMLP_small_deep(env=envs.envs[0])
                 elif args.transition_network == 'medium':
                     transition_model = JointMLP_medium(env=envs.envs[0])
+                elif args.transition_network == 'medium_deep':
+                    transition_model = JointMLP_medium_deep(env=envs.envs[0])
                 elif args.transition_network == 'large':
                     transition_model = JointMLP_large(env=envs.envs[0])
                 elif args.transition_network == 'deep':
                     transition_model = JointMLP_deep(env=envs.envs[0])
                 else:
                     raise ValueError(
-                        f"Unknown transition_network={args.transition_network}. Expected one of 'small', 'small_deep', 'medium', 'large', 'deep'."
+                        f"Unknown transition_network={args.transition_network}. Expected one of 'small', 'small_deep', 'medium', 'medium_deep', 'large', 'deep'."
                     )
 
                 if args.value_aligned_model_loss:
@@ -331,16 +338,17 @@ def train(args):
                         critic=qf1,
                         gamma=args.gamma,
                         T=args.horizon,
-                        optimizer_class=Adam,
+                        optimizer_class=transition_optimizer,
                         lr=args.learning_rate,
                         model_loss=model_loss,
                         temp_behavior=args.temp_model_loss,
                         huber_delta=args.huber_delta,
                     )
                 else:
+                    
                     transition_trainer = Trainer(
                         transition_model,
-                        Adam,
+                        transition_optimizer,
                         lr=args.learning_rate,
                         model_loss=model_loss,
                         huber_delta=args.huber_delta,

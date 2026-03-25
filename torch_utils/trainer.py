@@ -1,12 +1,13 @@
 import torch
 import torch.nn as nn
 from torch.optim.adam import Adam
+from typing import Any
 
 class Trainer():
     def __init__(
         self,
         model,
-        optimizer_class=Adam,
+        optimizer_class: Any = Adam,
         lr=3e-4,
         model_loss=None,
         huber_delta=1.0,
@@ -47,7 +48,7 @@ class Trainer_ValueAligned():
         critic,
         gamma=0.99,
         T=3,
-        optimizer_class=Adam,
+        optimizer_class: Any = Adam,
         lr=3e-4,
         model_loss=None,
         temp_behavior="bce_exp",
@@ -102,7 +103,7 @@ class EnsembleTrainer():
     def __init__(
         self,
         model,
-        optimizer_class=Adam,
+        optimizer_class: Any = Adam,
         lr=3e-4,
         model_loss=None,
         huber_delta=1.0,
