@@ -3,6 +3,11 @@ import torch.nn as nn
 from torch.optim.adam import Adam
 from typing import Any
 
+
+def gaussian_nll_diag(pred_mean, target, pred_logvar):
+    inv_var = torch.exp(-pred_logvar)
+    return 0.5 * torch.mean(inv_var * torch.square(target - pred_mean) + pred_logvar)
+
 class Trainer():
     def __init__(
         self,
@@ -23,12 +28,19 @@ class Trainer():
         next_observations = data.next_observations.to(device=device, dtype=torch.float32)
         rewards = data.rewards.to(device=device, dtype=torch.float32)
 
-        pred_next_observations, pred_rewards = self.model(observations, actions)
+        if hasattr(self.model, "update_input_stats"):
+            self.model.update_input_stats(observations, actions)
 
-        pred_dynamics = pred_next_observations - observations
-        target_dynamics = next_observations - observations
-
-        dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
+        if hasattr(self.model, "predict_distribution"):
+            pred_next_observations, pred_rewards, pred_logvar = self.model.predict_distribution(observations, actions)
+            pred_dynamics = pred_next_observations - observations
+            target_dynamics = next_observations - observations
+            dynamics_loss = gaussian_nll_diag(pred_dynamics, target_dynamics, pred_logvar)
+        else:
+            pred_next_observations, pred_rewards = self.model(observations, actions)
+            pred_dynamics = pred_next_observations - observations
+            target_dynamics = next_observations - observations
+            dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
         reward_loss = self.model_loss(pred_rewards, rewards)
         loss = dynamics_loss + reward_loss
         
@@ -68,6 +80,8 @@ class Trainer_ValueAligned():
         observations = data.observations.to(device=device, dtype=torch.float32)
         next_observations = data.next_observations.to(device=device, dtype=torch.float32)
         actions = data.actions.to(device=device, dtype=torch.float32)
+        if hasattr(self.transition_model, "update_input_stats"):
+            self.transition_model.update_input_stats(observations, actions)
         # dones = data.dones.to(device=device, dtype=torch.float32)
 
         pred_next_observations, _ = self.transition_model(observations, actions)
@@ -119,15 +133,22 @@ class EnsembleTrainer():
         next_observations = data.next_observations.to(device=device, dtype=torch.float32)
         rewards = data.rewards.to(device=device, dtype=torch.float32)
 
+        if hasattr(self.model, "update_input_stats"):
+            self.model.update_input_stats(observations, actions)
+
         dynamics_losses = []
         reward_losses = []
         for member_model in self.model.models:
-            pred_next_observations, pred_rewards = member_model(observations, actions)
-
-            pred_dynamics = pred_next_observations - observations
-            target_dynamics = next_observations - observations
-
-            dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
+            if hasattr(member_model, "predict_distribution"):
+                pred_next_observations, pred_rewards, pred_logvar = member_model.predict_distribution(observations, actions)
+                pred_dynamics = pred_next_observations - observations
+                target_dynamics = next_observations - observations
+                dynamics_loss = gaussian_nll_diag(pred_dynamics, target_dynamics, pred_logvar)
+            else:
+                pred_next_observations, pred_rewards = member_model(observations, actions)
+                pred_dynamics = pred_next_observations - observations
+                target_dynamics = next_observations - observations
+                dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
             reward_loss = self.model_loss(pred_rewards, rewards)
 
             dynamics_losses.append(dynamics_loss)

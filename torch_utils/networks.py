@@ -1,4 +1,5 @@
 import numpy as np
+import random
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -27,6 +28,41 @@ activation_map = {
     'tanh': nn.Tanh,
 }
 
+
+class DistributionalDynamicsWrapper(nn.Module):
+    """Wrap an existing transition model with a diagonal-Gaussian dynamics head.
+
+    The base model's forward API is preserved for MPPI compatibility, while
+    `predict_distribution` provides mean and log-variance for training.
+    """
+
+    def __init__(self, base_model, env, hidden_size=256, min_logvar=-10.0, max_logvar=2.0):
+        super().__init__()
+        self.base_model = base_model
+        self.nx = int(np.prod(env.observation_space.shape))
+        self.nu = int(np.prod(env.action_space.shape))
+        self.min_logvar = float(min_logvar)
+        self.max_logvar = float(max_logvar)
+
+        self.logvar_net = nn.Sequential(
+            nn.Linear(self.nx + self.nu, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, self.nx),
+        )
+
+    def forward(self, x, u):
+        return self.base_model(x, u)
+
+    def predict_distribution(self, x, u):
+        pred_next_observations, pred_rewards = self.base_model(x, u)
+        raw_logvar = self.logvar_net(torch.cat([x, u], 1))
+        logvar = self.min_logvar + (self.max_logvar - self.min_logvar) * torch.sigmoid(raw_logvar)
+        return pred_next_observations, pred_rewards, logvar
+
+    def update_input_stats(self, x, u):
+        if hasattr(self.base_model, "update_input_stats"):
+            self.base_model.update_input_stats(x, u)
+
 class JointMLP_small_deep(nn.Module):
     def __init__(self, env):
         super().__init__()
@@ -40,14 +76,18 @@ class JointMLP_small_deep(nn.Module):
         self.fc1 = nn.Linear(self.nx + self.nu, 64)
         self.fc2 = nn.Linear(64, 64)
         self.fc3 = nn.Linear(64, 64)
-        self.fc4 = nn.Linear(64, self.nx)
+        self.fc4 = nn.Linear(64, 64)
+        self.fc5 = nn.Linear(64, 64)
+        self.fc6 = nn.Linear(64, self.nx)
 
     def forward(self, x, u):
         z = torch.cat([x, u], 1)
         y = F.silu(self.fc1(z))
         y = F.silu(self.fc2(y))
         y = F.silu(self.fc3(y))
-        dx = self.fc4(y)
+        y = F.silu(self.fc4(y))
+        y = F.silu(self.fc5(y))
+        dx = self.fc6(y)
         x_next = x + dx
         with torch.no_grad():
             reward = self.get_torch_reward(x, u, x_next)
@@ -210,7 +250,7 @@ class EnsembleDynamicsModel(nn.Module):
                 reward[mask] = member_reward
             return x_next, reward
 
-        model_idx = torch.randint(self.ensemble_size, (1,), device=x.device).item()
+        model_idx = int(torch.randint(self.ensemble_size, (1,), device=x.device).item())
         return self.models[model_idx](x, u)
 
 class JointMLP_flex(nn.Module):
@@ -256,7 +296,7 @@ class FlexEnsembleDynamicsModel(nn.Module):
             num_nodes_list = [np.random.choice([64,128,256]) for _ in range(ensemble_size)]
         if activations_list is None:
             activations_list = [
-                [np.random.choice([nn.ReLU, nn.SiLU, nn.Tanh])() for _ in range(num_hidden_list[i])]
+                [random.choice([nn.ReLU, nn.SiLU, nn.Tanh])() for _ in range(num_hidden_list[i])]
                 for i in range(ensemble_size)
             ]
         elif activations_list[0][0] in activation_map.keys():
@@ -305,5 +345,5 @@ class FlexEnsembleDynamicsModel(nn.Module):
                 reward[mask] = member_reward
             return x_next, reward
 
-        model_idx = torch.randint(self.ensemble_size, (1,), device=x.device).item()
+        model_idx = int(torch.randint(self.ensemble_size, (1,), device=x.device).item())
         return self.models[model_idx](x, u)

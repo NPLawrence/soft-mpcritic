@@ -18,7 +18,7 @@ from gymppi.mppi import MPPI
 
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP_small, JointMLP_small_deep, JointMLP_medium_deep, JointMLP_medium, JointMLP_large, JointMLP_deep, EnsembleDynamicsModel, FlexEnsembleDynamicsModel
+from torch_utils.networks import JointMLP_small, JointMLP_small_deep, JointMLP_medium_deep, JointMLP_medium, JointMLP_large, JointMLP_deep, EnsembleDynamicsModel, FlexEnsembleDynamicsModel, DistributionalDynamicsWrapper
 from torch_utils.trainer import Trainer, Trainer_ValueAligned, EnsembleTrainer
 
 from torch_utils.soap import SOAP
@@ -136,6 +136,14 @@ class Args:
     temp_model_loss: str = "bce_exp"
     model_optimizer: str = "adam"
     """the optimizer class for training the transition model, one of 'adam', 'soap'"""
+    distributional_dynamics: bool = False
+    """if True, train transition dynamics with diagonal-Gaussian NLL"""
+    dynamics_dist_hidden_size: int = 256
+    """hidden size for the distributional log-variance head"""
+    dynamics_dist_min_logvar: float = -10.0
+    """minimum log-variance clamp for distributional dynamics"""
+    dynamics_dist_max_logvar: float = 2.0
+    """maximum log-variance clamp for distributional dynamics"""
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
     def thunk():
@@ -306,6 +314,17 @@ def train(args):
                         raise ValueError(
                             "value_aligned_model_loss is not supported with transition_ensemble_size > 1."
                         )
+                if args.distributional_dynamics:
+                    transition_model.models = nn.ModuleList([
+                        DistributionalDynamicsWrapper(
+                            model,
+                            envs.envs[0],
+                            hidden_size=args.dynamics_dist_hidden_size,
+                            min_logvar=args.dynamics_dist_min_logvar,
+                            max_logvar=args.dynamics_dist_max_logvar,
+                        )
+                        for model in transition_model.models
+                    ])
                 transition_trainer = EnsembleTrainer(
                     transition_model,
                     transition_optimizer,
@@ -353,6 +372,37 @@ def train(args):
                         model_loss=model_loss,
                         huber_delta=args.huber_delta,
                     )
+
+                if args.distributional_dynamics:
+                    transition_model = DistributionalDynamicsWrapper(
+                        transition_model,
+                        envs.envs[0],
+                        hidden_size=args.dynamics_dist_hidden_size,
+                        min_logvar=args.dynamics_dist_min_logvar,
+                        max_logvar=args.dynamics_dist_max_logvar,
+                    )
+                    # Rebuild trainer so optimizer tracks wrapper head parameters too.
+                    if args.value_aligned_model_loss:
+                        transition_trainer = Trainer_ValueAligned(
+                            model=transition_model,
+                            actor=actor,
+                            critic=qf1,
+                            gamma=args.gamma,
+                            T=args.horizon,
+                            optimizer_class=transition_optimizer,
+                            lr=args.learning_rate,
+                            model_loss=model_loss,
+                            temp_behavior=args.temp_model_loss,
+                            huber_delta=args.huber_delta,
+                        )
+                    else:
+                        transition_trainer = Trainer(
+                            transition_model,
+                            transition_optimizer,
+                            lr=args.learning_rate,
+                            model_loss=model_loss,
+                            huber_delta=args.huber_delta,
+                        )
 
             mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
@@ -488,6 +538,19 @@ def train(args):
                 writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
                 writer.add_scalar("losses/dynamics_loss", dynamics_loss.item(), global_step)
                 writer.add_scalar("losses/reward_loss", reward_loss.item(), global_step)
+                if "transition_model" in locals():
+                    with torch.no_grad():
+                        if hasattr(transition_model, "predict_distribution"):
+                            _, _, pred_logvar = transition_model.predict_distribution(data.observations, data.actions)
+                            writer.add_scalar("losses/dynamics_logvar_mean", pred_logvar.mean().item(), global_step)
+                        elif hasattr(transition_model, "models"):
+                            member_logvars = []
+                            for member_model in transition_model.models:
+                                if hasattr(member_model, "predict_distribution"):
+                                    _, _, member_logvar = member_model.predict_distribution(data.observations, data.actions)
+                                    member_logvars.append(member_logvar.mean())
+                            if len(member_logvars) > 0:
+                                writer.add_scalar("losses/dynamics_logvar_mean", torch.stack(member_logvars).mean().item(), global_step)
                 print("SPS:", int(global_step / (time.time() - start_time)))
                 writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
