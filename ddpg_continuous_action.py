@@ -141,6 +141,8 @@ class Args:
     temp_model_loss: str = "bce_exp"
     model_optimizer: str = "adam"
     """the optimizer class for training the transition model, one of 'adam', 'soap'"""
+    trainer_scaler: str = 'null'
+    """class of scaler for training the transition model, one of 'null', 'minmax', 'standard'"""
     distributional_dynamics: bool = False
     """if True, train transition dynamics with diagonal-Gaussian NLL"""
     dynamics_dist_hidden_size: int = 256
@@ -339,6 +341,7 @@ def train(args):
                     lr=args.learning_rate,
                     model_loss=model_loss,
                     huber_delta=args.huber_delta,
+                    scaler=args.scaler
                 )
             else:
                 if args.transition_network == 'small':
@@ -370,6 +373,7 @@ def train(args):
                         model_loss=model_loss,
                         temp_behavior=args.temp_model_loss,
                         huber_delta=args.huber_delta,
+                        scaler=args.scaler
                     )
                 else:
                     
@@ -379,6 +383,7 @@ def train(args):
                         lr=args.learning_rate,
                         model_loss=model_loss,
                         huber_delta=args.huber_delta,
+                        scaler=args.scaler
                     )
 
                 if args.distributional_dynamics:
@@ -402,6 +407,7 @@ def train(args):
                             model_loss=model_loss,
                             temp_behavior=args.temp_model_loss,
                             huber_delta=args.huber_delta,
+                            scaler=args.scaler
                         )
                     else:
                         transition_trainer = Trainer(
@@ -410,6 +416,7 @@ def train(args):
                             lr=args.learning_rate,
                             model_loss=model_loss,
                             huber_delta=args.huber_delta,
+                            scaler=args.scaler
                         )
 
             mppi = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
@@ -476,6 +483,9 @@ def train(args):
                 if args.mppi:
                     mppi.reset()
         rb.add(obs, real_next_obs, actions, Us, rewards, terminations, infos)
+        if (global_step > 0) and (global_step % 100 == 0):
+            deltas = rb.next_observations[:global_step] - rb.observations[:global_step]
+            transition_trainer.scaler.fit(torch.from_numpy(deltas).to(torch.float32))
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs

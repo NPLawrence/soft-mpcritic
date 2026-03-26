@@ -21,8 +21,8 @@ condition_1 = (pd.isna(data['transition_ensemble_size']))
 condition_2 = (data['Q_in_mppi'])
 condition_3 = (data['mppi_targets'])
 data.loc[condition_0 & ~condition_1 & condition_2, 'label1'] = r'$f$ Ensemble'
-data.loc[condition_0 & condition_1 & ~condition_2, 'label1'] = r'$Q$'
-data.loc[condition_0 & condition_1 & condition_2 & condition_3, 'label1'] = r'$f$ Ensemble $+$ $Q$'
+data.loc[condition_0 & condition_1 & ~condition_2, 'label1'] = r'$\mathcal{Q}$'
+data.loc[condition_0 & condition_1 & condition_2 & condition_3, 'label1'] = r'$f$ Ensemble $+$ $\mathcal{Q}$'
 data['label1'] = data['label1'].astype("category")
 
 data['label2'] = ""
@@ -99,11 +99,11 @@ subplot1_kwargs = {**lineplot_kwargs, **{
     "style" : hue1,
     # "dashes": [(4, 1), (2, 1), (1,1)]
     "palette": {r'$f$ Ensemble': sns.color_palette()[0],
-                r'$Q$': sns.color_palette()[1],
-                r'$f$ Ensemble $+$ $Q$': sns.color_palette()[2]},
+                r'$\mathcal{Q}$': sns.color_palette()[1],
+                r'$f$ Ensemble $+$ $\mathcal{Q}$': sns.color_palette()[2]},
     "dashes": {r'$f$ Ensemble': (3,1),
-               r'$Q$': (1,4.5),
-               r'$f$ Ensemble $+$ $Q$': (1,0),
+               r'$\mathcal{Q}$': (1,4.5),
+               r'$f$ Ensemble $+$ $\mathcal{Q}$': (1,0),
                '': (0,0)},
 }}
 # 'Targets', 'Control', 'Targets $+$ Control'
