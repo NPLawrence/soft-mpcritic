@@ -2,13 +2,19 @@ import numpy as np
 import torch
 from torch.distributions import MultivariateNormal
 
+# Uniform-prior MPPI: prior p = U(u_min, u_max) per dimension,
+# controlled distribution q = N(U, Σ) (Gaussian, same as standard MPPI).
+#
+# IS correction: λ log(q(v)/p(v)) — constant-in-p cancels; non-constant part:
+#   perturbation_cost = -λ/2 * Σ_t γ^t ε_t^T Σ⁻¹ ε_t
+# There is no U-dependent term2 (unlike Gaussian MPPI) so the value is just term1.
+#
 # reference:
 # https://doi.org/10.1109/ICRA.2017.7989202 "Information theoretic MPC for model-based reinforcement learning"
 # https://github.com/UM-ARM-Lab/pytorch_mppi/blob/master/src/pytorch_mppi/mppi.py
 
 
-
-class MPPI():
+class UniformMPPI():
     def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, control_mode="default", ensemble_rollout_mode="trajectory"):
         self.env = env
         self.rollout_envs = rollout_envs
@@ -46,8 +52,8 @@ class MPPI():
             assert all([self.rollout_envs[i].num_envs == self.K for i in range(self.B)]) # one rollout_env for each sample
 
         self.lambda_ = lambda_ # free energy scale/parameter
-        self.mean = torch.zeros(self.nu, dtype=self.dtype) if (mean is None) else mean.to(dtype=self.dtype) # mean of action noise distribution
-        self.cov = torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of action noise distribution
+        self.mean = torch.zeros(self.nu, dtype=self.dtype) if (mean is None) else mean.to(dtype=self.dtype) # mean of Gaussian controlled distribution
+        self.cov = torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of Gaussian controlled distribution
         self.inv_cov = torch.inverse(self.cov)
         self.noise_dist = MultivariateNormal(self.mean, covariance_matrix=self.cov)
 
@@ -91,7 +97,7 @@ class MPPI():
         else:
             self.delta_U = self.U
 
-        # Sample all noise at once: [B, K, T+1, nu]
+        # Sample all noise at once from Gaussian controlled distribution: [B, K, T+1, nu]
         self.noise = self.noise_dist.rsample((self.B, self.K, self.T + 1))
 
         if self.rollout_envs:
@@ -110,38 +116,39 @@ class MPPI():
         # --- Fully batched path: vectorise over B × K ---
         rollout_cost = self._compute_rollout_costs_batched()  # [B, K]
 
-        if self.control_mode in {"mean_residual", "warmstart_residual"}:
-            perturbation_base = self.delta_U  # [B, 1, T+1, nu]
-        else:
-            perturbation_base = self.U        # [B, 1, T+1, nu]
+        # Prior p = U(u_min, u_max) per dimension (flat over action bounds).
+        # Controlled q = N(U, Σ).  IS correction: λ log(q(v)/p(v)).
+        # log p is constant, so only the q-dependent part survives:
+        #   λ log q(v) = -λ/2 ε^T Σ⁻¹ ε  + const
+        # This is fully sample-dependent (no U-dependent term) so it goes
+        # entirely into perturbation_cost; no term2 correction is needed.
+        #
+        # Compare to Gaussian-prior MPPI where log(p/q) = u^T Σ⁻¹ ε - ½ u^T Σ⁻¹ u:
+        # here the sign is reversed and the quadratic is in ε not u.
+        # A negative cost for on-mean samples down-weights them relative to the
+        # flat prior, which is the correct IS correction.
 
-        # action_cost: [B, K, T+1, nu]; perturbation_cost: [B, K]
-        action_cost = self.lambda_ * self.noise @ self.inv_cov
-        perturbation_cost = torch.sum(
-            self.discounting.view(1, 1, -1, 1) * perturbation_base * action_cost,
-            # perturbation_base * action_cost,
+        # perturbation_cost: -λ/2 * Σ_t γ^t ε_t^T Σ⁻¹ ε_t  →  [B, K]
+        perturbation_cost = -0.5 * self.lambda_ * torch.sum(
+            self.discounting.view(1, 1, -1, 1) * (self.noise @ self.inv_cov) * self.noise,
             dim=(2, 3),
         )  # [B, K]
-
-        rep_noise = self.noise                                          # [B, K, T+1, nu]
 
         cost_total = rollout_cost + perturbation_cost                  # [B, K]
         beta = torch.min(cost_total, dim=1, keepdim=True).values       # [B, 1]
         cost_total_non_zero = torch.exp(-(1.0 / self.lambda_) * (cost_total - beta))  # [B, K]
 
         if mode == 'value':
+            # Free energy: F* = -λ log E_p[exp(-S/λ)], estimated via IS from q.
+            # term1 already uses IS-corrected costs (perturbation_cost included);
+            # there is no U-dependent term2 (unlike Gaussian-prior MPPI).
             logsumexp = torch.log(torch.sum(cost_total_non_zero, dim=1))           # [B]
             term1 = -self.lambda_ * (-beta.squeeze(1) / self.lambda_ + logsumexp)
-            term2 = self.lambda_ / 2 * torch.sum(
-                self.discounting.view(1, 1, -1, 1) * perturbation_base * (perturbation_base @ self.inv_cov),
-                # perturbation_base * (perturbation_base @ self.inv_cov),
-                dim=(1, 2, 3),
-            )  # [B]
-            self.value = -(term1 + term2).unsqueeze(1)  # [B, 1]
+            self.value = -term1.unsqueeze(1)  # [B, 1]
 
         eta = torch.sum(cost_total_non_zero, dim=1, keepdim=True)  # [B, 1]
         omega = cost_total_non_zero / eta                           # [B, K]
-        perturbations = torch.einsum('bk,bktu->btu', omega, rep_noise)  # [B, T+1, nu]
+        perturbations = torch.einsum('bk,bktu->btu', omega, self.noise)  # [B, T+1, nu]
         self.U[:, 0] = self.U[:, 0] + perturbations
 
         if self.control_mode == "mu":
@@ -183,6 +190,8 @@ class MPPI():
         Returns rollout costs shaped [B, K].
         """
         B, K, T, ns, nu = self.B, self.K, self.T, self.ns, self.nu
+        if self.observation is None:
+            raise ValueError("Observation must be set before computing rollout costs.")
 
         # Expand observations: [B, ns] → [B*K, ns]
         observation = (
@@ -300,8 +309,7 @@ class MPPI():
 
         base_expanded = base.unsqueeze(1).expand(B, K, nu)          # [B, K, nu]
         residual = base_expanded + self.noise[:, :, t, :]            # [B, K, nu]
-        # with clamping called after _get_perturbed_action_batched, this isn't doing anything
-        self.noise[:, :, t, :] = residual - base_expanded           # update in-place (clamping propagation)
+        self.noise[:, :, t, :] = residual - base_expanded
 
         return residual.reshape(B * K, nu)
 
@@ -324,6 +332,8 @@ class MPPI():
                 next_observations, rewards = self.transition_model(observation, action)
             return next_observations.to(self.dtype), -rewards.flatten().to(self.dtype)
         else:
+            if self.rollout_envs is None:
+                raise ValueError("rollout_envs must be provided when transition_model is None.")
             action = action.view(self.B, self.K, self.nu)
             next_observations_list = []
             rewards_list = []
@@ -337,6 +347,8 @@ class MPPI():
 
     def _sync_envs(self):
         """align the mppi environments"""
+        if self.observation is None or self.rollout_envs is None:
+            raise ValueError("Observation and rollout_envs must be set before syncing environments.")
         observation = self.observation.numpy()
         for (rollout_env, obs) in zip(self.rollout_envs, observation):
             rollout_env.reset(options={'observation':obs,
@@ -355,55 +367,3 @@ class MPPI():
         self.rollout_actions = None
         self.rollout_model_indices = None
 
-if __name__ == '__main__':
-    import gymnasium as gym
-    from env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
-    env_id = "HalfCheetah-v5"
-    if any(s in env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Humanoid']):
-        env_kwargs = {'exclude_current_positions_from_observation': False}
-    elif 'Ant' in env_id:
-        env_kwargs = {'exclude_current_positions_from_observation': False, 'include_cfrc_ext_in_observation': False, 'contact_cost_weight': 0.}
-    else:
-        env_kwargs = {}
-
-    B = 1
-    K = 100
-    T = 30
-
-    control_mode = "default"
-
-    env = BaseEnvWrapper(gym.make(env_id, render_mode='human', **env_kwargs))
-    ns = env.observation_space.shape[0]
-    rollout_envs = [gym.make_vec(env_id, num_envs=K, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper], **env_kwargs) for _ in range(B)]
-
-    cov = 0.1*torch.diag(torch.ones(np.prod(env.action_space.shape)))
-    mppi = MPPI(env, rollout_envs=rollout_envs, K=K, T=T, B=B, cov=cov, lambda_=0.1, control_mode=control_mode)
-
-    obs, _ = env.reset(seed=0)
-    env.render()
-    
-    cumulative_reward = 0.0
-    for _ in range(1000):
-        batch = np.repeat(obs[None, :], B, axis=0)
-        belief = batch + 0.*np.random.randn(B, ns)
-        action = mppi.make_step(belief)
-        # value = mppi.get_value(belief)
-        # action = env.action_space.sample().reshape([1,1,-1])
-            
-        next_obs, reward, _, _, info = env.step(action[0,0])
-
-        s, a, s_ = map(torch.from_numpy, [obs, action, next_obs])
-        r = env.get_torch_reward(s, a ,s_)
-        rew = torch.tensor([reward], dtype=torch.float32)
-
-        print(torch.isclose(r, rew))
-
-        cumulative_reward += reward
-        # print(reward)
-        env.render()
-
-        obs = next_obs
-
-    print("Cumulative reward:", cumulative_reward)
-    env.close()
-    [env.close() for env in rollout_envs]

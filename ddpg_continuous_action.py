@@ -15,6 +15,7 @@ import tyro
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from gymppi.mppi import MPPI
+from gymppi.mppi_uniform import UniformMPPI
 
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
@@ -79,6 +80,8 @@ class Args:
     """MPPI online control mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
     mppi_target_mode: str = "default"
     """MPPI offline target mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
+    mppi_prior: str = "gaussian"
+    """prior distribution for MPPI: one of {'gaussian', 'uniform'} (gaussian=standard MPPI; uniform=uniform prior + Gaussian controlled)"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
     mppi_online: bool = True
@@ -170,7 +173,7 @@ class QNetwork(nn.Module):
     def forward(self, x, a):
         x = torch.cat([x, a], 1)
         x = F.silu(self.fc1(x))
-        x = F.tanh(self.fc2(x))
+        x = F.silu(self.fc2(x))
         x = self.fc3(x)
         return x
 
@@ -261,18 +264,21 @@ def train(args):
     q_optimizer = Adam(list(qf1.parameters()), lr=args.learning_rate)
     actor_optimizer = Adam(list(actor.parameters()), lr=args.learning_rate)
 
-    transition_ensemble_size = args.horizon if args.transition_ensemble_size is None else args.transition_ensemble_size
+    transition_ensemble_size = max(args.horizon, 1) if args.transition_ensemble_size is None else args.transition_ensemble_size
     if transition_ensemble_size < 1:
         raise ValueError(f"transition_ensemble_size must be >= 1, got {transition_ensemble_size}.")
-    target_horizon = 1 if args.target_horizon is None else args.target_horizon
-    if target_horizon < 1:
-        raise ValueError(f"target_horizon must be >= 1, got {target_horizon}.")
+    target_horizon = args.horizon if args.target_horizon is None else args.target_horizon
+    if target_horizon < 0:
+        raise ValueError(f"target_horizon must be >= 0, got {target_horizon}.")
     mppi_target_iterations = args.mppi_online_iterations if args.mppi_target_iterations is None else args.mppi_target_iterations
     if mppi_target_iterations < 1:
         raise ValueError(f"mppi_target_iterations must be >= 1, got {mppi_target_iterations}.")
 
     if args.mppi:
         Q = qf1 if args.Q_in_mppi else None
+        if args.mppi_prior not in {"gaussian", "uniform"}:
+            raise ValueError(f"Invalid mppi_prior={args.mppi_prior}. Expected one of 'gaussian', 'uniform'.")
+        _MPPI_cls = MPPI if args.mppi_prior == "gaussian" else UniformMPPI
         if args.mppi_control_mode not in {"default", "mu", "integrator", "mean_residual", "warmstart_residual"}:
             raise ValueError(f"Invalid mppi_control_mode={args.mppi_control_mode}. Expected one of 'default', 'mu', 'integrator', 'mean_residual', 'warmstart_residual'.")
         if args.ensemble_rollout_mode not in {"trajectory", "batch"}:
@@ -282,11 +288,11 @@ def train(args):
         cov = args.var*torch.diag(torch.ones(np.prod(envs.single_action_space.shape), dtype=torch.float32))
 
         if args.env_in_mppi:
-            mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs[0:1], gamma=args.gamma, Q=Q, mu=actor,
+            mppi = _MPPI_cls(env=envs.envs[0], rollout_envs=rollout_envs[0:1], gamma=args.gamma, Q=Q, mu=actor,
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
                         lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
             if args.mppi_targets:
-                target_mppi = MPPI(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
+                target_mppi = _MPPI_cls(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
                                 B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
         else:
@@ -404,11 +410,11 @@ def train(args):
                             huber_delta=args.huber_delta,
                         )
 
-            mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
+            mppi = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
                         lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
             if args.mppi_targets:
-                target_mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
+                target_mppi = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
                                 B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
 
@@ -472,7 +478,7 @@ def train(args):
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
 
-        if global_step == args.learning_starts and args.mppi and not args.env_in_mppi and args.pretrain:
+        if global_step == args.learning_starts and args.mppi and not args.env_in_mppi and args.pretrain and args.horizon > 0:
             for _ in range(int(args.learning_starts*args.transition_utd)):
                 data, _, _ = rb.sample(args.batch_size)
                 dynamics_loss, reward_loss = transition_trainer.update(data)
@@ -520,7 +526,7 @@ def train(args):
                     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
 
             # if not args.env_in_mppi and (global_step % args.transition_frequency == 0):
-            if args.mppi and not args.env_in_mppi:
+            if args.mppi and not args.env_in_mppi and args.horizon > 0:
                 dynamics_loss, reward_loss = transition_trainer.update(data)
                 for _ in range(args.transition_utd-1):
                     data, _, _ = rb.sample(args.batch_size)
