@@ -23,7 +23,7 @@ class Trainer():
         next_observations = data.next_observations.to(device=device, dtype=torch.float32)
         rewards = data.rewards.to(device=device, dtype=torch.float32)
 
-        pred_next_observations, pred_rewards = self.model(observations, actions)
+        pred_next_observations, pred_rewards, pred_terminations = self.model(observations, actions)
 
         pred_dynamics = pred_next_observations - observations
         target_dynamics = next_observations - observations
@@ -70,7 +70,7 @@ class Trainer_ValueAligned():
         actions = data.actions.to(device=device, dtype=torch.float32)
         # dones = data.dones.to(device=device, dtype=torch.float32)
 
-        pred_next_observations, _ = self.transition_model(observations, actions)
+        pred_next_observations, _, _ = self.transition_model(observations, actions)
         model_value = self.Q(pred_next_observations, self.mu(pred_next_observations))
         target_value = self.Q(next_observations, self.mu(next_observations)).detach()
 
@@ -122,7 +122,7 @@ class EnsembleTrainer():
         dynamics_losses = []
         reward_losses = []
         for member_model in self.model.models:
-            pred_next_observations, pred_rewards = member_model(observations, actions)
+            pred_next_observations, pred_rewards, pred_terminations = member_model(observations, actions)
 
             pred_dynamics = pred_next_observations - observations
             target_dynamics = next_observations - observations

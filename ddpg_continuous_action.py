@@ -79,6 +79,8 @@ class Args:
     """MPPI online control mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
     mppi_target_mode: str = "default"
     """MPPI offline target mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
+    mppi_handle_terminations: bool = False
+    """make MPPI planner appropriately down weight trajectories that lead to termination"""
     Q_in_mppi: bool = True
     """use Q-function as MPPI terminal cost"""
     mppi_online: bool = True
@@ -197,10 +199,10 @@ def train(args):
             "Set mppi=True to use MPPI control/targets, or set mppi_online=False and mppi_targets=False."
         )
 
-    if any(s in args.env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Humanoid']):
-        env_kwargs = {'exclude_current_positions_from_observation': False}
-    elif 'Ant' in args.env_id:
+    if 'Ant' in args.env_id:
         env_kwargs = {'exclude_current_positions_from_observation': False, 'include_cfrc_ext_in_observation': False, 'contact_cost_weight': 0.}
+    elif any(s in args.env_id for s in ['Swimmer', 'Hopper', 'Walker', 'Cheetah', 'Humanoid']):
+        env_kwargs = {'exclude_current_positions_from_observation': False}
     else:
         env_kwargs = {}
 
@@ -275,11 +277,11 @@ def train(args):
 
         if args.env_in_mppi:
             mppi = MPPI(env=envs.envs[0], rollout_envs=rollout_envs[0:1], gamma=args.gamma, Q=Q, mu=actor,
-                        B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
+                        B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
                         lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
+                                B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
         else:
             transition_optimizer = Adam if args.model_optimizer == "adam" else SOAP
@@ -355,11 +357,11 @@ def train(args):
                     )
 
             mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
-                        B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode,
+                        B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
                         lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
             if args.mppi_targets:
                 target_mppi = MPPI(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode,
+                                B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
 
     rb = WarmstartReplayBuffer(

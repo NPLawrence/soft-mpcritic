@@ -9,7 +9,7 @@ from torch.distributions import MultivariateNormal
 
 
 class MPPI():
-    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, control_mode="default", ensemble_rollout_mode="trajectory"):
+    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, control_mode="default", ensemble_rollout_mode="trajectory", handle_terminations=True):
         self.env = env
         self.rollout_envs = rollout_envs
         self.env_dtype = self.env.observation_space.dtype
@@ -27,6 +27,7 @@ class MPPI():
 
         self.control_mode = control_mode
         self.ensemble_rollout_mode = ensemble_rollout_mode
+        self.handle_terminations = handle_terminations
 
         if self.control_mode not in {"default", "mu", "integrator", "traj_integrator", "mean_residual", "warmstart_residual"}:
             raise ValueError(f"Invalid control_mode={self.control_mode}. Expected one of 'default', 'mu', 'integrator', 'traj_integrator', 'mean_residual', 'warmstart_residual'.")
@@ -192,6 +193,8 @@ class MPPI():
         )
 
         rollout_cost = torch.zeros(B * K, dtype=self.dtype)
+        if self.handle_terminations:
+            rollout_terminateds = torch.zeros((B * K), dtype=torch.bool)
         observations = [observation]
         actions = []
 
@@ -239,7 +242,12 @@ class MPPI():
                 action = residual
 
             action = self._bound_action(action)
-            next_observation, l = self._step_rollout(observation, action)
+            next_observation, l, terminations = self._step_rollout(observation, action)
+            if self.handle_terminations:
+                # Null out rewards for already terminated trajectories
+                l = l * (1 - rollout_terminateds.to(self.dtype))
+                # Terminate relevant trajectories
+                rollout_terminateds = torch.logical_or(rollout_terminateds, terminations)
             rollout_cost += self.discounting[t] * l
             observation = next_observation
             actions.append(action)
@@ -274,9 +282,12 @@ class MPPI():
                 action = residual
 
             action = self._bound_action(action)
-            rollout_cost += self.discounting[T] * -self.Q(observation, action).flatten()
+            q = self.Q(observation, action).flatten()
+            if self.handle_terminations:
+                q = q * (1 - rollout_terminateds.to(self.dtype))
+            rollout_cost += self.discounting[T] * -q
 
-            next_observation, _ = self._step_rollout(observation, action)
+            next_observation, _, _ = self._step_rollout(observation, action)
             observation = next_observation
             actions.append(action)
             observations.append(observation)
@@ -284,6 +295,8 @@ class MPPI():
         # [B*K, steps, ns/nu] stored for inspection
         self.rollout_actions = torch.stack(actions, dim=1)        # [B*K, steps, nu]
         self.rollout_observations = torch.stack(observations, dim=1)  # [B*K, steps+1, ns]
+        if self.handle_terminations:
+            self.rollout_terminateds = rollout_terminateds
 
         return rollout_cost.view(B, K)  # [B, K]
 
@@ -312,25 +325,27 @@ class MPPI():
         """step the trajectory forward with the appropriate dynamics and cost models or environments"""
         if self.transition_model is not None:
             if self.rollout_model_indices is not None:
-                next_observations, rewards = self.transition_model(
+                next_observations, rewards, terminations = self.transition_model(
                     observation,
                     action,
                     model_indices=self.rollout_model_indices,
                 )
             else:
-                next_observations, rewards = self.transition_model(observation, action)
-            return next_observations.to(self.dtype), -rewards.flatten().to(self.dtype)
+                next_observations, rewards, terminations = self.transition_model(observation, action)
+            return next_observations.to(self.dtype), -rewards.flatten().to(self.dtype), terminations.flatten()
         else:
+            if self.handle_terminations:
+                raise NotImplementedError(f"handle_terminations={self.handle_terminations} not implemented when transition_model={self.transition_model}.")
             action = action.view(self.B, self.K, self.nu)
             next_observations_list = []
             rewards_list = []
             for (rollout_env, act) in zip(self.rollout_envs, action):
-                next_obs, rew, _, _, _ = rollout_env.step(act.numpy())
+                next_obs, rew, terminations, _, _ = rollout_env.step(act.numpy())
                 next_observations_list.append(next_obs)
                 rewards_list.append(rew)
             next_observation = np.concatenate(next_observations_list)
             rewards = np.concatenate(rewards_list)
-            return torch.from_numpy(next_observation).to(self.dtype), -torch.from_numpy(rewards).to(self.dtype)
+            return torch.from_numpy(next_observation).to(self.dtype), -torch.from_numpy(rewards).to(self.dtype), torch.from_numpy(terminations)
 
     def _sync_envs(self):
         """align the mppi environments"""
@@ -350,6 +365,7 @@ class MPPI():
         self.rollout_observation = None
         self.rollout_observations = None
         self.rollout_actions = None
+        self.rollout_terminateds = None
         self.rollout_model_indices = None
 
 if __name__ == '__main__':
