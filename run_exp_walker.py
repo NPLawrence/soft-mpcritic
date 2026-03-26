@@ -20,12 +20,13 @@ if __name__ == "__main__":
     args.transition_network = "medium"
     args.transition_ensemble_size = None
     args.mppi_handle_terminations = True
+    args.trainer_scaler = 'standard'
 
-    # args.model_optimizer = 'soap'
+    args.model_optimizer = 'soap'
     args.mppi_prior = 'gaussian'
     # args.mppi_prior = 'uniform'
     for seed in range(5):
         args.seed = seed
-        for distributional_dynamics in [False, True]:
+        for distributional_dynamics in [False]:
             args.distributional_dynamics = distributional_dynamics
             train(args)

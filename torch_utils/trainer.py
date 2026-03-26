@@ -198,7 +198,7 @@ class EnsembleTrainer():
         self.model = model
         self.model_loss = nn.SmoothL1Loss(beta=huber_delta) if model_loss is None else model_loss
         self.model_optimizer = optimizer_class(list(self.model.parameters()), lr=lr)
-        self.scaler = scaler_map(model.models[0].nx)
+        self.scaler = scaler_map[scaler](model.models[0].nx)
 
     def update(self, data):
         device = next(self.model.parameters()).device
