@@ -54,7 +54,7 @@ class DistributionalDynamicsWrapper(nn.Module):
         return self.base_model(x, u)
 
     def predict_distribution(self, x, u):
-        pred_next_observations, pred_rewards = self.base_model(x, u)
+        pred_next_observations, pred_rewards, pred_terminations = self.base_model(x, u)
         raw_logvar = self.logvar_net(torch.cat([x, u], 1))
         logvar = self.min_logvar + (self.max_logvar - self.min_logvar) * torch.sigmoid(raw_logvar)
         return pred_next_observations, pred_rewards, logvar

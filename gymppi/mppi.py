@@ -337,6 +337,8 @@ class MPPI():
                 next_observations, rewards, terminations = self.transition_model(observation, action)
             return next_observations.to(self.dtype), -rewards.flatten().to(self.dtype), terminations.flatten()
         else:
+            if self.rollout_envs is None:
+                raise ValueError("rollout_envs must be provided when transition_model is None.")
             if self.handle_terminations:
                 raise NotImplementedError(f"handle_terminations={self.handle_terminations} not implemented when transition_model={self.transition_model}.")
             action = action.view(self.B, self.K, self.nu)
