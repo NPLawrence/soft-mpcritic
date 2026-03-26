@@ -341,7 +341,7 @@ def train(args):
                     lr=args.learning_rate,
                     model_loss=model_loss,
                     huber_delta=args.huber_delta,
-                    scaler=args.scaler
+                    scaler=args.trainer_scaler
                 )
             else:
                 if args.transition_network == 'small':
@@ -373,7 +373,7 @@ def train(args):
                         model_loss=model_loss,
                         temp_behavior=args.temp_model_loss,
                         huber_delta=args.huber_delta,
-                        scaler=args.scaler
+                        scaler=args.trainer_scaler
                     )
                 else:
                     
@@ -383,7 +383,7 @@ def train(args):
                         lr=args.learning_rate,
                         model_loss=model_loss,
                         huber_delta=args.huber_delta,
-                        scaler=args.scaler
+                        scaler=args.trainer_scaler
                     )
 
                 if args.distributional_dynamics:
@@ -407,7 +407,7 @@ def train(args):
                             model_loss=model_loss,
                             temp_behavior=args.temp_model_loss,
                             huber_delta=args.huber_delta,
-                            scaler=args.scaler
+                            scaler=args.trainer_scaler
                         )
                     else:
                         transition_trainer = Trainer(
@@ -416,7 +416,7 @@ def train(args):
                             lr=args.learning_rate,
                             model_loss=model_loss,
                             huber_delta=args.huber_delta,
-                            scaler=args.scaler
+                            scaler=args.trainer_scaler
                         )
 
             mppi = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
