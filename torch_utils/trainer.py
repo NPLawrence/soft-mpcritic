@@ -8,6 +8,72 @@ def gaussian_nll_diag(pred_mean, target, pred_logvar):
     inv_var = torch.exp(-pred_logvar)
     return 0.5 * torch.mean(inv_var * torch.square(target - pred_mean) + pred_logvar)
 
+class NullScaler(nn.Module):
+    def __init__(self, nx: int):
+        super().__init__()
+
+    def fit(self, observations: torch.Tensor):
+        self.fitted = torch.tensor(True)
+
+    def scale(self, x: torch.Tensor) -> torch.Tensor:
+        return x
+
+    def unscale(self, x_scaled: torch.Tensor) -> torch.Tensor:
+        return x_scaled
+
+class MinMaxScaler(nn.Module):
+    """Min-max scaler that maps observations to [-1, 1].
+    
+    Call `fit(observations)` once before training, then the scaler
+    is applied automatically in the member model's forward pass.
+    """
+    def __init__(self, nx: int, epsilon: float = 1e-6):
+        super().__init__()
+        # Register as buffers so they move with .to(device) and are saved in state_dict
+        self.epsilon = epsilon
+        self.register_buffer("obs_min", torch.zeros(nx))
+        self.register_buffer("obs_max", torch.ones(nx))
+        self.register_buffer("fitted", torch.tensor(False))
+
+    def fit(self, observations: torch.Tensor):
+        """Compute per-feature min/max from a (N, nx) tensor."""
+        self.obs_min = observations.min(axis=0).values
+        self.obs_max = observations.max(axis=0).values
+        self.fitted = torch.tensor(True)
+
+    def scale(self, x: torch.Tensor) -> torch.Tensor:
+        range_ = (self.obs_max - self.obs_min).clamp(min=self.epsilon)
+        return 2.0 * (x - self.obs_min) / range_ - 1.0          # → [-1, 1]
+
+    def unscale(self, x_scaled: torch.Tensor) -> torch.Tensor:
+        range_ = (self.obs_max - self.obs_min).clamp(min=self.epsilon)
+        return (x_scaled + 1.0) / 2.0 * range_ + self.obs_min   # → original space
+
+class StandardScaler(nn.Module):
+    def __init__(self, nx: int, epsilon: float = 1e-6):
+        super().__init__()
+        self.epsilon = epsilon
+        self.register_buffer("mean", torch.zeros(nx))
+        self.register_buffer("std",  torch.ones(nx))
+        self.register_buffer("fitted", torch.tensor(False))
+
+    def fit(self, observations: torch.Tensor):
+        self.mean   = observations.mean(axis=0)
+        self.std    = observations.std(axis=0).clamp(min=self.epsilon)
+        self.fitted = torch.tensor(True)
+
+    def scale(self, x: torch.Tensor) -> torch.Tensor:
+        return (x - self.mean) / self.std
+
+    def unscale(self, x_scaled: torch.Tensor) -> torch.Tensor:
+        return x_scaled * self.std + self.mean
+
+scaler_map = {
+    'null' : NullScaler,
+    'minmax' : MinMaxScaler,
+    'standard': StandardScaler,
+}
+
 class Trainer():
     def __init__(
         self,
@@ -16,10 +82,12 @@ class Trainer():
         lr=3e-4,
         model_loss=None,
         huber_delta=1.0,
+        scaler='null',
     ):
         self.model = model
         self.model_loss = nn.SmoothL1Loss(beta=huber_delta) if model_loss is None else model_loss
         self.model_optimizer = optimizer_class(list(self.model.parameters()), lr=lr)
+        self.scaler = scaler_map[scaler](model.nx)
 
     def update(self, data):
         device = next(self.model.parameters()).device
@@ -40,7 +108,9 @@ class Trainer():
             pred_next_observations, pred_rewards, pred_terminations = self.model(observations, actions)
             pred_dynamics = pred_next_observations - observations
             target_dynamics = next_observations - observations
-            dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
+            scaled_pred_dynamics = self.scaler.scale(pred_dynamics)
+            scaled_target_dynamics = self.scaler.scale(target_dynamics)
+            dynamics_loss = self.model_loss(scaled_pred_dynamics, scaled_target_dynamics)
         reward_loss = self.model_loss(pred_rewards, rewards)
         loss = dynamics_loss + reward_loss
         
@@ -65,6 +135,7 @@ class Trainer_ValueAligned():
         model_loss=None,
         temp_behavior="bce_exp",
         huber_delta=1.0,
+        scaler='null',
     ):
         self.transition_model = model
         self.mu = actor
@@ -74,6 +145,7 @@ class Trainer_ValueAligned():
         self.model_optimizer = optimizer_class(list(self.transition_model.parameters()), lr=lr)
         self.gamma = gamma
         self.T = T
+        self.scaler = scaler_map[scaler](model.nx)
 
     def update(self, data):
         device = next(self.transition_model.parameters()).device
@@ -121,10 +193,12 @@ class EnsembleTrainer():
         lr=3e-4,
         model_loss=None,
         huber_delta=1.0,
+        scaler='null',
     ):
         self.model = model
         self.model_loss = nn.SmoothL1Loss(beta=huber_delta) if model_loss is None else model_loss
         self.model_optimizer = optimizer_class(list(self.model.parameters()), lr=lr)
+        self.scaler = scaler_map(model.models[0].nx)
 
     def update(self, data):
         device = next(self.model.parameters()).device
@@ -143,12 +217,16 @@ class EnsembleTrainer():
                 pred_next_observations, pred_rewards, pred_logvar = member_model.predict_distribution(observations, actions)
                 pred_dynamics = pred_next_observations - observations
                 target_dynamics = next_observations - observations
-                dynamics_loss = gaussian_nll_diag(pred_dynamics, target_dynamics, pred_logvar)
+                scaled_pred_dynamics = self.scaler.scale(pred_dynamics)
+                scaled_target_dynamics = self.scaler.scale(target_dynamics)
+                dynamics_loss = gaussian_nll_diag(scaled_pred_dynamics, scaled_target_dynamics, pred_logvar)
             else:
                 pred_next_observations, pred_rewards, pred_terminations = member_model(observations, actions)
                 pred_dynamics = pred_next_observations - observations
                 target_dynamics = next_observations - observations
-                dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
+                scaled_pred_dynamics = self.scaler.scale(pred_dynamics)
+                scaled_target_dynamics = self.scaler.scale(target_dynamics)
+                dynamics_loss = self.model_loss(scaled_pred_dynamics, scaled_target_dynamics)
             reward_loss = self.model_loss(pred_rewards, rewards)
 
             dynamics_losses.append(dynamics_loss)
