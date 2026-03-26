@@ -57,6 +57,14 @@ class UniformMPPI():
         self.cov = torch.diag(torch.ones(self.nu, dtype=self.dtype)) if (cov is None) else cov.to(dtype=self.dtype) # covariance matrix of Gaussian controlled distribution
         self.inv_cov = torch.inverse(self.cov)
         self.noise_dist = MultivariateNormal(self.mean, covariance_matrix=self.cov)
+        action_width = (self.u_max - self.u_min).to(dtype=self.dtype)
+        if torch.any(action_width <= 0):
+            raise ValueError("UniformMPPI requires strictly positive action-space widths.")
+        _, logabsdet = torch.linalg.slogdet(self.cov)
+        self.log_uniform_volume = torch.sum(torch.log(action_width))
+        self.log_gaussian_normalizer = -0.5 * (
+            self.nu * np.log(2 * np.pi) + logabsdet
+        )
 
         self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) # initial action sequence per batch element
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
@@ -71,6 +79,7 @@ class UniformMPPI():
         self.rollout_observation = None
         self.rollout_observations = None
         self.rollout_actions = None
+        self.rollout_valids = None
         self.value = torch.zeros(self.B, 1)
         self.rollout_model_indices = None
 
@@ -136,8 +145,27 @@ class UniformMPPI():
         )  # [B, K]
 
         cost_total = rollout_cost + perturbation_cost                  # [B, K]
-        beta = torch.min(cost_total, dim=1, keepdim=True).values       # [B, 1]
-        cost_total_non_zero = torch.exp(-(1.0 / self.lambda_) * (cost_total - beta))  # [B, K]
+        valid_mask = self.rollout_valids
+        if valid_mask is None:
+            valid_mask = torch.ones_like(cost_total, dtype=torch.bool)
+
+        masked_cost_total = torch.where(valid_mask, cost_total, torch.full_like(cost_total, torch.inf))
+        beta = torch.min(masked_cost_total, dim=1, keepdim=True).values       # [B, 1]
+        cost_total_non_zero = torch.where(
+            valid_mask,
+            torch.exp(-(1.0 / self.lambda_) * (cost_total - beta)),
+            torch.zeros_like(cost_total),
+        )  # [B, K]
+
+        eta = torch.sum(cost_total_non_zero, dim=1, keepdim=True)  # [B, 1]
+        all_invalid = eta.squeeze(1) <= 0
+        if torch.any(all_invalid):
+            fallback_beta = torch.min(cost_total[all_invalid], dim=1, keepdim=True).values
+            beta[all_invalid] = fallback_beta
+            cost_total_non_zero[all_invalid] = torch.exp(
+                -(1.0 / self.lambda_) * (cost_total[all_invalid] - fallback_beta)
+            )
+            eta = torch.sum(cost_total_non_zero, dim=1, keepdim=True)
 
         if mode == 'value':
             # Free energy: F* = -λ log E_p[exp(-S/λ)], estimated via IS from q.
@@ -145,9 +173,12 @@ class UniformMPPI():
             # there is no U-dependent term2 (unlike Gaussian-prior MPPI).
             logsumexp = torch.log(torch.sum(cost_total_non_zero, dim=1))           # [B]
             term1 = -self.lambda_ * (-beta.squeeze(1) / self.lambda_ + logsumexp)
+            additive_constant = torch.sum(self.discounting) * self.lambda_ * (
+                self.log_gaussian_normalizer + self.log_uniform_volume
+            )
+            term1 = term1 + additive_constant
             self.value = -term1.unsqueeze(1)  # [B, 1]
 
-        eta = torch.sum(cost_total_non_zero, dim=1, keepdim=True)  # [B, 1]
         omega = cost_total_non_zero / eta                           # [B, K]
         perturbations = torch.einsum('bk,bktu->btu', omega, self.noise)  # [B, T+1, nu]
         self.U[:, 0] = self.U[:, 0] + perturbations
@@ -204,6 +235,7 @@ class UniformMPPI():
         rollout_cost = torch.zeros(B * K, dtype=self.dtype)
         if self.handle_terminations:
             rollout_terminateds = torch.zeros((B * K), dtype=torch.bool)
+        rollout_valids = torch.ones((B * K), dtype=torch.bool)
         observations = [observation]
         actions = []
 
@@ -250,6 +282,7 @@ class UniformMPPI():
             else:
                 action = residual
 
+            rollout_valids = torch.logical_and(rollout_valids, self._action_in_support(action))
             action = self._bound_action(action)
             next_observation, l, terminations = self._step_rollout(observation, action)
             if self.handle_terminations:
@@ -290,6 +323,7 @@ class UniformMPPI():
             else:
                 action = residual
 
+            rollout_valids = torch.logical_and(rollout_valids, self._action_in_support(action))
             action = self._bound_action(action)
             q = self.Q(observation, action).flatten()
             if self.handle_terminations:
@@ -307,6 +341,7 @@ class UniformMPPI():
             else torch.empty(B * K, 0, nu, dtype=self.dtype)
         )  # [B*K, steps, nu]
         self.rollout_observations = torch.stack(observations, dim=1)  # [B*K, steps+1, ns]
+        self.rollout_valids = rollout_valids.view(B, K)
         if self.handle_terminations:
             self.rollout_terminateds = rollout_terminateds
 
@@ -325,6 +360,10 @@ class UniformMPPI():
         self.noise[:, :, t, :] = residual - base_expanded
 
         return residual.reshape(B * K, nu)
+
+    def _action_in_support(self, action):
+        """Return mask for actions inside the uniform prior support."""
+        return torch.all((action >= self.u_min) & (action <= self.u_max), dim=-1)
 
     def _bound_action(self, action):
         """bound action within action space"""
@@ -380,6 +419,7 @@ class UniformMPPI():
         self.rollout_observation = None
         self.rollout_observations = None
         self.rollout_actions = None
+        self.rollout_valids = None
         self.rollout_terminateds = None
         self.rollout_model_indices = None
 
