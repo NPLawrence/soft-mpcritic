@@ -69,6 +69,7 @@ class JointMLP_small_deep(nn.Module):
         self.nx = np.prod(env.observation_space.shape)
         self.nu = np.prod(env.action_space.shape)
         self.get_torch_reward = env.get_wrapper_attr('get_torch_reward')
+        self.get_torch_termination = env.get_wrapper_attr('get_torch_termination')
         self.reward_bounds = env.get_wrapper_attr('reward_bounds')
         self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
         self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
@@ -91,7 +92,8 @@ class JointMLP_small_deep(nn.Module):
         x_next = x + dx
         with torch.no_grad():
             reward = self.get_torch_reward(x, u, x_next)
-        return x_next, reward
+            termination = self.get_torch_termination(x, u, x_next)
+        return x_next, reward, termination
 
 class JointMLP_medium_deep(nn.Module):
     def __init__(self, env):
@@ -99,6 +101,7 @@ class JointMLP_medium_deep(nn.Module):
         self.nx = np.prod(env.observation_space.shape)
         self.nu = np.prod(env.action_space.shape)
         self.get_torch_reward = env.get_wrapper_attr('get_torch_reward')
+        self.get_torch_termination = env.get_wrapper_attr('get_torch_termination')
         self.reward_bounds = env.get_wrapper_attr('reward_bounds')
         self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
         self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
@@ -117,7 +120,8 @@ class JointMLP_medium_deep(nn.Module):
         x_next = x + dx
         with torch.no_grad():
             reward = self.get_torch_reward(x, u, x_next)
-        return x_next, reward
+            termination = self.get_torch_termination(x, u, x_next)
+        return x_next, reward, termination
     
 class JointMLP_small(nn.Module):
     def __init__(self, env):
@@ -125,6 +129,7 @@ class JointMLP_small(nn.Module):
         self.nx = np.prod(env.observation_space.shape)
         self.nu = np.prod(env.action_space.shape)
         self.get_torch_reward = env.get_wrapper_attr('get_torch_reward')
+        self.get_torch_termination = env.get_wrapper_attr('get_torch_termination')
         self.reward_bounds = env.get_wrapper_attr('reward_bounds')
         self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
         self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
@@ -141,7 +146,8 @@ class JointMLP_small(nn.Module):
         x_next = x + dx
         with torch.no_grad():
             reward = self.get_torch_reward(x, u, x_next)
-        return x_next, reward
+            termination = self.get_torch_termination(x, u, x_next)
+        return x_next, reward, termination
 
 class JointMLP_medium(nn.Module):
     def __init__(self, env):
@@ -149,6 +155,7 @@ class JointMLP_medium(nn.Module):
         self.nx = np.prod(env.observation_space.shape)
         self.nu = np.prod(env.action_space.shape)
         self.get_torch_reward = env.get_wrapper_attr('get_torch_reward')
+        self.get_torch_termination = env.get_wrapper_attr('get_torch_termination')
         self.reward_bounds = env.get_wrapper_attr('reward_bounds')
         self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
         self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
@@ -165,7 +172,8 @@ class JointMLP_medium(nn.Module):
         x_next = x + dx
         with torch.no_grad():
             reward = self.get_torch_reward(x, u, x_next)
-        return x_next, reward
+            termination = self.get_torch_termination(x, u, x_next)
+        return x_next, reward, termination
 
 class JointMLP_large(nn.Module):
     def __init__(self, env):
@@ -173,6 +181,7 @@ class JointMLP_large(nn.Module):
         self.nx = np.prod(env.observation_space.shape)
         self.nu = np.prod(env.action_space.shape)
         self.get_torch_reward = env.get_wrapper_attr('get_torch_reward')
+        self.get_torch_termination = env.get_wrapper_attr('get_torch_termination')
         self.reward_bounds = env.get_wrapper_attr('reward_bounds')
         self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
         self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
@@ -189,7 +198,8 @@ class JointMLP_large(nn.Module):
         x_next = x + dx
         with torch.no_grad():
             reward = self.get_torch_reward(x, u, x_next)
-        return x_next, reward
+            termination = self.get_torch_termination(x, u, x_next)
+        return x_next, reward, termination
 
 class JointMLP_deep(nn.Module):
     def __init__(self, env):
@@ -197,6 +207,7 @@ class JointMLP_deep(nn.Module):
         self.nx = np.prod(env.observation_space.shape)
         self.nu = np.prod(env.action_space.shape)
         self.get_torch_reward = env.get_wrapper_attr('get_torch_reward')
+        self.get_torch_termination = env.get_wrapper_attr('get_torch_termination')
         self.reward_bounds = env.get_wrapper_attr('reward_bounds')
         self.reward_scale = (self.reward_bounds['high'] - self.reward_bounds['low']) / 2
         self.reward_bias = (self.reward_bounds['high'] + self.reward_bounds['low']) / 2
@@ -217,7 +228,8 @@ class JointMLP_deep(nn.Module):
         x_next = x + dx
         with torch.no_grad():
             reward = self.get_torch_reward(x, u, x_next)
-        return x_next, reward
+            termination = self.get_torch_termination(x, u, x_next)
+        return x_next, reward, termination
 
 class EnsembleDynamicsModel(nn.Module):
     def __init__(self, env, ensemble_size=5, network_size="small"):
@@ -242,13 +254,16 @@ class EnsembleDynamicsModel(nn.Module):
             reward = None
             for model_idx in torch.unique(model_indices).tolist():
                 mask = model_indices == model_idx
-                member_x_next, member_reward = self.models[model_idx](x[mask], u[mask])
+                member_x_next, member_reward, member_termination = self.models[model_idx](x[mask], u[mask])
                 x_next[mask] = member_x_next
                 if reward is None:
                     reward_shape = (x.shape[0],) + tuple(member_reward.shape[1:])
                     reward = torch.empty(reward_shape, device=member_reward.device, dtype=member_reward.dtype)
+                if member_termination is None:
+                    termination_shape = (x.shape[0],) + tuple(member_termination.shape[1:])
+                    termination = torch.empty(termination_shape, device=member_termination.device, dtype=member_termination.dtype)
                 reward[mask] = member_reward
-            return x_next, reward
+            return x_next, reward, termination
 
         model_idx = int(torch.randint(self.ensemble_size, (1,), device=x.device).item())
         return self.models[model_idx](x, u)
@@ -337,13 +352,16 @@ class FlexEnsembleDynamicsModel(nn.Module):
             reward = None
             for model_idx in torch.unique(model_indices).tolist():
                 mask = model_indices == model_idx
-                member_x_next, member_reward = self.models[model_idx](x[mask], u[mask])
+                member_x_next, member_reward, member_termination = self.models[model_idx](x[mask], u[mask])
                 x_next[mask] = member_x_next
                 if reward is None:
                     reward_shape = (x.shape[0],) + tuple(member_reward.shape[1:])
                     reward = torch.empty(reward_shape, device=member_reward.device, dtype=member_reward.dtype)
+                if member_termination is None:
+                    termination_shape = (x.shape[0],) + tuple(member_termination.shape[1:])
+                    termination = torch.empty(termination_shape, device=member_termination.device, dtype=member_termination.dtype)
                 reward[mask] = member_reward
-            return x_next, reward
+            return x_next, reward, termination
 
         model_idx = int(torch.randint(self.ensemble_size, (1,), device=x.device).item())
         return self.models[model_idx](x, u)

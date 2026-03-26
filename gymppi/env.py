@@ -176,6 +176,24 @@ class BaseEnvWrapper(gymnasium.Wrapper):
 
                 return forward_reward + healthy_reward - ctrl_cost
 
+    def get_torch_termination(self, obs, action, next_obs):
+        if 'mujoco' in self.env.unwrapped.spec.entry_point:
+            if ':Walker2d' in self.env.unwrapped.spec.entry_point:
+                z = next_obs[...,[1]]
+                angle = next_obs[...,[2]]
+
+                min_z, max_z = self.env.unwrapped._healthy_z_range
+                min_angle, max_angle = self.env.unwrapped._healthy_angle_range
+
+                healthy_z = torch.logical_and(min_z < z, z < max_z)
+                healthy_angle = torch.logical_and(min_angle < angle, angle < max_angle)
+                is_healthy = torch.all(torch.concat([healthy_z, healthy_angle], dim=-1), dim=-1, keepdim=True)
+
+                return ~is_healthy
+            else:
+                return torch.zeros_like(obs[:,[0]]).to(torch.bool)
+
+
 class ClassicMPPIWrapper(gymnasium.Wrapper):
     """environment used for MPPI rollouts for classic control environments"""
     def __init__(self, env):

@@ -37,7 +37,7 @@ class Trainer():
             target_dynamics = next_observations - observations
             dynamics_loss = gaussian_nll_diag(pred_dynamics, target_dynamics, pred_logvar)
         else:
-            pred_next_observations, pred_rewards = self.model(observations, actions)
+            pred_next_observations, pred_rewards, pred_terminations = self.model(observations, actions)
             pred_dynamics = pred_next_observations - observations
             target_dynamics = next_observations - observations
             dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
@@ -84,7 +84,7 @@ class Trainer_ValueAligned():
             self.transition_model.update_input_stats(observations, actions)
         # dones = data.dones.to(device=device, dtype=torch.float32)
 
-        pred_next_observations, _ = self.transition_model(observations, actions)
+        pred_next_observations, _, _ = self.transition_model(observations, actions)
         model_value = self.Q(pred_next_observations, self.mu(pred_next_observations))
         target_value = self.Q(next_observations, self.mu(next_observations)).detach()
 
@@ -145,7 +145,7 @@ class EnsembleTrainer():
                 target_dynamics = next_observations - observations
                 dynamics_loss = gaussian_nll_diag(pred_dynamics, target_dynamics, pred_logvar)
             else:
-                pred_next_observations, pred_rewards = member_model(observations, actions)
+                pred_next_observations, pred_rewards, pred_terminations = member_model(observations, actions)
                 pred_dynamics = pred_next_observations - observations
                 target_dynamics = next_observations - observations
                 dynamics_loss = self.model_loss(pred_dynamics, target_dynamics)
