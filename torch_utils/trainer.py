@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.optim.adam import Adam
+import torch.nn.functional as F
 from typing import Any
 
 
@@ -253,3 +254,185 @@ class EnsembleTrainer():
         self.model_optimizer.step()
 
         return mean_dynamics_loss, mean_reward_loss
+
+class MPPITrainer:
+    def __init__(
+        self,
+        args,
+        rb,
+        qf1, qf1_target,
+        qf2, qf2_target,
+        q_optimizer,
+        target_mppi1, target_mppi2,
+        target_horizon,
+        mppi_target_iterations,
+        target_network_frequency,
+        transition_trainer,
+    ):
+        self.args = args
+        self.rb = rb
+        self.qf1, self.qf1_target = qf1, qf1_target
+        self.qf2, self.qf2_target = qf2, qf2_target
+        self.q_optimizer = q_optimizer
+        self.target_mppi1, self.target_mppi2 = target_mppi1, target_mppi2
+        self.target_horizon = target_horizon
+        self.mppi_target_iterations = mppi_target_iterations
+        self.target_network_frequency = target_network_frequency
+        self.transition_trainer = transition_trainer
+        self.training_pattern = args.training_pattern
+        self.last_done_global_step = args.learning_starts
+
+        self.last_qf1_a_values = torch.zeros(self.args.batch_size, 1)
+        self.last_qf1_loss = torch.tensor([0.])
+        self.last_qf_loss = torch.tensor([0.])
+        self.last_actor_loss = torch.tensor([0.])
+        self.last_dynamics_loss = torch.tensor([0.])
+        self.last_reward_loss = torch.tensor([0.])
+        self.last_qf2_a_values = torch.zeros(self.args.batch_size, 1)
+        self.last_qf2_loss = torch.tensor([0.])
+
+    def _sample(self):
+        data, batch_inds, env_indices = self.rb.sample(self.args.batch_size)
+        return data, batch_inds, env_indices
+
+    def _update_Q(self, global_step):
+        args = self.args
+
+        data, batch_inds, env_indices = self._sample()
+        with torch.no_grad():
+            if args.mppi and args.mppi_targets:
+                mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
+
+                U_init = data.Us[:, :self.target_horizon + 1] if args.mppi_target_warmstart else None
+
+                qf1_next_target, next_Us1 = self.target_mppi1.get_value(
+                    mppi_next_observations, U_init=U_init, num_iters=self.mppi_target_iterations
+                )
+                if args.double_Q:
+                    qf2_next_target, next_Us2 = self.target_mppi2.get_value(
+                        mppi_next_observations, U_init=U_init, num_iters=self.mppi_target_iterations
+                    )
+
+                if args.double_Q:
+                    qf_next_target = torch.concat([qf1_next_target, qf2_next_target], dim=1)
+                    next_Us_target = torch.concat([next_Us1, next_Us2], dim=1)
+                    min_qf_next_target, indices = torch.min(qf_next_target, dim=1)
+                    indices_expanded = indices[:, None, None, None].expand(
+                        -1, 1, next_Us_target.shape[2], next_Us_target.shape[3]
+                    )
+                    next_Us = next_Us_target.gather(1, indices_expanded)
+                else:
+                    min_qf_next_target, next_Us = qf1_next_target, next_Us1
+
+                self.rb.Us[batch_inds, env_indices, 1:self.target_horizon + 1] = next_Us[:, 0, :self.target_horizon]
+                next_q_value = (
+                    data.rewards.flatten()
+                    + (1 - data.dones.flatten()) * args.gamma * min_qf_next_target.view(-1)
+                )
+
+        qf1_a_values = self.qf1(data.observations, data.actions).view(-1)
+        qf1_loss = self._q_loss(qf1_a_values, next_q_value)
+
+        if args.double_Q:
+            qf2_a_values = self.qf2(data.observations, data.actions).view(-1)
+            qf2_loss = self._q_loss(qf2_a_values, next_q_value)
+            qf_loss = qf1_loss + qf2_loss
+        else:
+            qf2_a_values = torch.zeros_like(qf1_a_values)
+            qf2_loss = torch.zeros_like(qf1_loss)
+            qf_loss = qf1_loss
+
+        self.q_optimizer.zero_grad()
+        qf_loss.backward()
+        self.q_optimizer.step()
+
+        if global_step % self.target_network_frequency == 0:
+            self._soft_update(self.qf1, self.qf1_target)
+            if args.double_Q:
+                self._soft_update(self.qf2, self.qf2_target)
+
+        return qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss
+
+    def _update_f(self):
+        args = self.args
+        if args.mppi and not args.env_in_mppi and args.horizon > 0:
+            for _ in range(args.transition_utd):
+                data, _, _ = self._sample()
+                dynamics_loss, reward_loss = self.transition_trainer.update(data)
+        else:
+            dynamics_loss = torch.tensor([0.])
+            reward_loss = torch.tensor([0.])
+
+        return dynamics_loss, reward_loss
+
+    def update(self, global_step, infos):
+        args = self.args
+        episode_ended = "final_info" in infos
+        is_first_update = global_step == self.args.learning_starts + 1
+
+        if 'episodic' in args.training_pattern:
+            num_updates = global_step - self.last_done_global_step
+            if self.training_pattern == 'only_model_episodic':
+                if (episode_ended or is_first_update):
+                    for _ in range(num_updates):
+                        dynamics_loss, reward_loss = self._update_f()
+                else:
+                    dynamics_loss, reward_loss = self.last_dynamics_loss, self.last_reward_loss
+                qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = self._update_Q(global_step)
+            elif self.training_pattern == 'episodic_model_first':
+                if (episode_ended or is_first_update):
+                    for _ in range(num_updates):
+                        dynamics_loss, reward_loss = self._update_f()
+                    for k in range(num_updates):
+                        effective_global_step = self.last_done_global_step + k
+                        qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = self._update_Q(effective_global_step)
+                else:
+                    qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = (
+                        self.last_qf1_a_values, self.last_qf1_loss, self.last_qf_loss,
+                        self.last_qf2_a_values, self.last_qf2_loss
+                    )
+                    dynamics_loss, reward_loss = self.last_dynamics_loss, self.last_reward_loss
+            else:
+                if (episode_ended or is_first_update):
+                    for k in range(num_updates):
+                        effective_global_step = self.last_done_global_step + k
+                        qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = self._update_Q(effective_global_step)
+                        dynamics_loss, reward_loss = self._update_f()
+                else:
+                    qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = (
+                        self.last_qf1_a_values, self.last_qf1_loss, self.last_qf_loss,
+                        self.last_qf2_a_values, self.last_qf2_loss
+                    )
+                    dynamics_loss, reward_loss = self.last_dynamics_loss, self.last_reward_loss
+        else:
+            qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = self._update_Q(global_step)
+            dynamics_loss, reward_loss = self._update_f()
+
+        if episode_ended:
+            self.last_done_global_step = global_step
+
+        actor_loss = torch.tensor([0.])
+        self._update_last(qf1_a_values, qf1_loss, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss)
+
+        return qf1_a_values, qf1_loss, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss
+
+    def _q_loss(self, predicted, target):
+        if self.args.use_huber_loss:
+            return F.smooth_l1_loss(predicted, target, beta=self.args.huber_delta)
+        return F.mse_loss(predicted, target)
+
+    def _soft_update(self, online, target):
+        for param, target_param in zip(online.parameters(), target.parameters()):
+            target_param.data.copy_(
+                self.args.tau * param.data + (1 - self.args.tau) * target_param.data
+            )
+    
+    def _update_last(self, qf1_a_values, qf1_loss, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss):
+        self.last_qf1_a_values = qf1_a_values
+        self.last_qf1_loss = qf1_loss
+        self.last_qf_loss = qf_loss
+        self.last_actor_loss = actor_loss
+        self.last_dynamics_loss = dynamics_loss
+        self.last_reward_loss = reward_loss
+        self.last_qf2_a_values = qf2_a_values
+        self.last_qf2_loss = qf2_loss
