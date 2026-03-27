@@ -140,7 +140,7 @@ class Args:
     """if True, use value function to formulate cross-entropy model loss---otherwise use simple regression via `use_huber_loss`"""
     temp_model_loss: str = "bce_exp"
     model_optimizer: str = "adam"
-    """the optimizer class for training the transition model, one of 'adam', 'soap'"""
+    """the optimizer class for model, Q-network, and actor; one of 'adam', 'soap'"""
     trainer_scaler: str = 'null'
     """class of scaler for training the transition model, one of 'null', 'minmax', 'standard'"""
     distributional_dynamics: bool = False
@@ -265,8 +265,11 @@ def train(args):
     target_actor = Actor(envs).to(device)
     target_actor.load_state_dict(actor.state_dict())
     qf1_target.load_state_dict(qf1.state_dict())
-    q_optimizer = Adam(list(qf1.parameters()), lr=args.learning_rate)
-    actor_optimizer = Adam(list(actor.parameters()), lr=args.learning_rate)
+    if args.model_optimizer not in {"adam", "soap"}:
+        raise ValueError(f"Invalid model_optimizer={args.model_optimizer}. Expected one of 'adam', 'soap'.")
+    optimizer_class = Adam if args.model_optimizer == "adam" else SOAP
+    q_optimizer = optimizer_class(list(qf1.parameters()), lr=args.learning_rate)
+    actor_optimizer = optimizer_class(list(actor.parameters()), lr=args.learning_rate)
 
     transition_ensemble_size = max(args.horizon, 1) if args.transition_ensemble_size is None else args.transition_ensemble_size
     if transition_ensemble_size < 1:
@@ -300,7 +303,7 @@ def train(args):
                                 B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
         else:
-            transition_optimizer = Adam if args.model_optimizer == "adam" else SOAP
+            transition_optimizer = optimizer_class
             if transition_ensemble_size > 1:
                 if args.transition_network == 'flex':
                     transition_model = FlexEnsembleDynamicsModel(
@@ -524,16 +527,20 @@ def train(args):
             q_optimizer.zero_grad()
             qf1_loss.backward()
             q_optimizer.step()
+            actor_loss = torch.tensor(float("nan"), device=device)
 
             if global_step % args.policy_frequency == 0:
-                actor_loss = -qf1(data.observations, actor(data.observations)).mean()
-                actor_optimizer.zero_grad()
-                actor_loss.backward()
-                actor_optimizer.step()
+                if (not args.mppi) or (args.mppi_control_mode == "mu"):
+                    actor_loss = -qf1(data.observations, actor(data.observations)).mean()
+                    actor_optimizer.zero_grad()
+                    actor_loss.backward()
+                    actor_optimizer.step()
 
-                # update the target network
-                for param, target_param in zip(actor.parameters(), target_actor.parameters()):
-                    target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
+                    # update the target actor only when actor is trained
+                    for param, target_param in zip(actor.parameters(), target_actor.parameters()):
+                        target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
+
+                # always update the target critic
                 for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
                     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
 
