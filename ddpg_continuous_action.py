@@ -421,7 +421,7 @@ def train(args):
                                              B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
                                              lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
         else:
-            transition_optimizer = optimizer_class
+            transition_optimizer = Adam if args.model_optimizer == "adam" else SOAP
             if transition_ensemble_size > 1:
                 if args.transition_network == 'flex':
                     transition_model = FlexEnsembleDynamicsModel(
