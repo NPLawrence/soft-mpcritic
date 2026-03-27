@@ -209,6 +209,10 @@ class EnsembleTrainer():
 
         if hasattr(self.model, "update_input_stats"):
             self.model.update_input_stats(observations, actions)
+        elif hasattr(self.model, "models"):
+            for member_model in self.model.models:
+                if hasattr(member_model, "update_input_stats"):
+                    member_model.update_input_stats(observations, actions)
 
         dynamics_losses = []
         reward_losses = []
@@ -221,7 +225,15 @@ class EnsembleTrainer():
                 scaled_target_dynamics = self.scaler.scale(target_dynamics)
                 dynamics_loss = gaussian_nll_diag(scaled_pred_dynamics, scaled_target_dynamics, pred_logvar)
             else:
-                pred_next_observations, pred_rewards, pred_terminations = member_model(observations, actions)
+                member_outputs = member_model(observations, actions)
+                if len(member_outputs) == 3:
+                    pred_next_observations, pred_rewards, _ = member_outputs
+                elif len(member_outputs) == 2:
+                    pred_next_observations, pred_rewards = member_outputs
+                else:
+                    raise ValueError(
+                        f"Expected member model to return 2 or 3 outputs, got {len(member_outputs)}."
+                    )
                 pred_dynamics = pred_next_observations - observations
                 target_dynamics = next_observations - observations
                 scaled_pred_dynamics = self.scaler.scale(pred_dynamics)

@@ -252,6 +252,7 @@ class EnsembleDynamicsModel(nn.Module):
             model_indices = model_indices.to(device=x.device, dtype=torch.long)
             x_next = torch.empty_like(x)
             reward = None
+            termination = None
             for model_idx in torch.unique(model_indices).tolist():
                 mask = model_indices == model_idx
                 member_x_next, member_reward, member_termination = self.models[model_idx](x[mask], u[mask])
@@ -259,10 +260,12 @@ class EnsembleDynamicsModel(nn.Module):
                 if reward is None:
                     reward_shape = (x.shape[0],) + tuple(member_reward.shape[1:])
                     reward = torch.empty(reward_shape, device=member_reward.device, dtype=member_reward.dtype)
-                if member_termination is None:
+                if member_termination is not None and termination is None:
                     termination_shape = (x.shape[0],) + tuple(member_termination.shape[1:])
                     termination = torch.empty(termination_shape, device=member_termination.device, dtype=member_termination.dtype)
                 reward[mask] = member_reward
+                if termination is not None and member_termination is not None:
+                    termination[mask] = member_termination
             return x_next, reward, termination
 
         model_idx = int(torch.randint(self.ensemble_size, (1,), device=x.device).item())
@@ -350,6 +353,7 @@ class FlexEnsembleDynamicsModel(nn.Module):
             model_indices = model_indices.to(device=x.device, dtype=torch.long)
             x_next = torch.empty_like(x)
             reward = None
+            termination = None
             for model_idx in torch.unique(model_indices).tolist():
                 mask = model_indices == model_idx
                 member_x_next, member_reward, member_termination = self.models[model_idx](x[mask], u[mask])
@@ -357,10 +361,12 @@ class FlexEnsembleDynamicsModel(nn.Module):
                 if reward is None:
                     reward_shape = (x.shape[0],) + tuple(member_reward.shape[1:])
                     reward = torch.empty(reward_shape, device=member_reward.device, dtype=member_reward.dtype)
-                if member_termination is None:
+                if member_termination is not None and termination is None:
                     termination_shape = (x.shape[0],) + tuple(member_termination.shape[1:])
                     termination = torch.empty(termination_shape, device=member_termination.device, dtype=member_termination.dtype)
                 reward[mask] = member_reward
+                if termination is not None and member_termination is not None:
+                    termination[mask] = member_termination
             return x_next, reward, termination
 
         model_idx = int(torch.randint(self.ensemble_size, (1,), device=x.device).item())
