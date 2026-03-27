@@ -156,8 +156,8 @@ class Args:
     """minimum log-variance clamp for distributional dynamics"""
     dynamics_dist_max_logvar: float = 2.0
     """maximum log-variance clamp for distributional dynamics"""
-    training_pattern: str = ''
-    """mppi training pattern for model and Q"""
+    training_pattern: str = 'online'
+    """mppi training pattern for model and Q, one of 'online', 'only_model_episodic', 'episodic_model_first', 'episodic'"""
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
     def thunk():
@@ -316,6 +316,10 @@ def train(args):
         raise ValueError(
             "Inconsistent MPPI settings: mppi=False but mppi_online or mppi_targets is True. "
             "Set mppi=True to use MPPI control/targets, or set mppi_online=False and mppi_targets=False."
+        )
+    if args.training_pattern not in ['', 'online', 'only_model_episodic', 'episodic_model_first', 'episodic']:
+        raise ValueError(
+            f"Invalid training_pattern={args.training_pattern}. Expected one of '', 'online', 'only_model_episodic', 'episodic_model_first', 'episodic'."
         )
 
     if 'Ant' in args.env_id:
@@ -646,7 +650,7 @@ def train(args):
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             if args.mppi:
-                if args.training_pattern is not '':
+                if args.training_pattern != '':
                     qf1_a_values, qf1_loss, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss = mppi_trainer.update(global_step, infos)
                 else:
                     qf1_a_values, qf1_loss, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss = update_mppi(
@@ -768,5 +772,5 @@ if __name__ == "__main__":
     args.horizon = 4
     args.num_rollouts = 200
     args.num_target_rollouts = 20
-    args.training_pattern = 'episodic_model' # 'episodic'
+    args.training_pattern = ''
     train(args)

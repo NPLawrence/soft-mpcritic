@@ -392,7 +392,7 @@ class MPPITrainer:
                         self.last_qf2_a_values, self.last_qf2_loss
                     )
                     dynamics_loss, reward_loss = self.last_dynamics_loss, self.last_reward_loss
-            else:
+            elif self.training_pattern == 'episodic':
                 if (episode_ended or is_first_update):
                     for k in range(num_updates):
                         effective_global_step = self.last_done_global_step + k
@@ -404,7 +404,7 @@ class MPPITrainer:
                         self.last_qf2_a_values, self.last_qf2_loss
                     )
                     dynamics_loss, reward_loss = self.last_dynamics_loss, self.last_reward_loss
-        else:
+        elif self.training_pattern == 'online':
             qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = self._update_Q(global_step)
             dynamics_loss, reward_loss = self._update_f()
 
