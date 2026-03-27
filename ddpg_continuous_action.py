@@ -151,6 +151,8 @@ class Args:
     """minimum log-variance clamp for distributional dynamics"""
     dynamics_dist_max_logvar: float = 2.0
     """maximum log-variance clamp for distributional dynamics"""
+    double_Q: bool = False
+    """use double Q-learning approach with mpp"""
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
     def thunk():
@@ -261,11 +263,18 @@ def train(args):
     actor = Actor(envs).to(device)
     qf1 = QNetwork(envs).to(device)
     qf1_target = QNetwork(envs).to(device)
+    if args.double_Q:
+        qf2 = QNetwork(envs).to(device)
+        qf2_target = QNetwork(envs).to(device)
     model_loss = nn.SmoothL1Loss(beta=args.huber_delta) if args.use_huber_loss else nn.MSELoss()
     target_actor = Actor(envs).to(device)
     target_actor.load_state_dict(actor.state_dict())
     qf1_target.load_state_dict(qf1.state_dict())
-    q_optimizer = Adam(list(qf1.parameters()), lr=args.learning_rate)
+    if args.double_Q:
+        qf2_target.load_state_dict(qf2.state_dict())
+        q_optimizer = Adam(list(qf1.parameters()) + list(qf2.parameters()), lr=args.learning_rate)
+    else:
+        q_optimizer = Adam(list(qf1.parameters()), lr=args.learning_rate)
     actor_optimizer = Adam(list(actor.parameters()), lr=args.learning_rate)
 
     transition_ensemble_size = max(args.horizon, 1) if args.transition_ensemble_size is None else args.transition_ensemble_size
@@ -296,9 +305,13 @@ def train(args):
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
                         lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
             if args.mppi_targets:
-                target_mppi = _MPPI_cls(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
-                                lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                target_mppi1 = _MPPI_cls(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
+                                         B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
+                                         lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                if args.double_Q:
+                    target_mppi2 = _MPPI_cls(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf2_target, mu=target_actor,
+                                             B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
+                                             lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
         else:
             transition_optimizer = Adam if args.model_optimizer == "adam" else SOAP
             if transition_ensemble_size > 1:
@@ -423,9 +436,13 @@ def train(args):
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
                         lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
             if args.mppi_targets:
-                target_mppi = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
+                target_mppi1 = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
                                 B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                if args.double_Q:
+                        target_mppi2 = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf2_target, mu=target_actor,
+                                                 B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
+                                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
 
     rb = WarmstartReplayBuffer(
         args.buffer_size,
@@ -503,26 +520,53 @@ def train(args):
                     mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
                     
                     if args.mppi_target_warmstart:
-                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
+                        qf1_next_target, next_Us1 = target_mppi1.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
+                        if args.double_Q:
+                            qf2_next_target, next_Us2 = target_mppi2.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
                     else:
-                        qf1_next_target, next_Us = target_mppi.get_value(mppi_next_observations, U_init=None, num_iters=mppi_target_iterations)
+                        qf1_next_target, next_Us1 = target_mppi1.get_value(mppi_next_observations, U_init=None, num_iters=mppi_target_iterations)
+                        if args.double_Q:
+                            qf2_next_target, next_Us2 = target_mppi2.get_value(mppi_next_observations, U_init=None, num_iters=mppi_target_iterations)
+
+                    if args.double_Q:
+                        qf_next_target = torch.concat([qf1_next_target, qf2_next_target], dim=1)
+                        next_Us_target = torch.concat([next_Us1, next_Us2], dim=1)
+                        min_qf_next_target, indices = torch.min(qf_next_target, dim=1)
+                        indices_expanded = indices[:, None, None, None].expand(-1, 1, next_Us_target.shape[2], next_Us_target.shape[3])
+                        next_Us = next_Us_target.gather(1, indices_expanded)
+                    else:
+                        min_qf_next_target, next_Us = qf1_next_target, next_Us1
 
                     rb.Us[batch_inds, env_indices, 1:target_horizon+1] = next_Us[:,0,:target_horizon] # copy over solution offset by 1 step
-                    next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)
+                    next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
                 else:
                     next_state_actions = target_actor(data.next_observations)
                     qf1_next_target = qf1_target(data.next_observations, next_state_actions)
-                    next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)
+                    if args.double_Q:
+                        qf2_next_target = qf2_target(data.next_observations, next_state_actions)
+                        min_qf_next_target = torch.min(qf1_next_target, qf2_next_target)
+                    else:
+                        min_qf_next_target = qf1_next_target
+                    next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
 
             qf1_a_values = qf1(data.observations, data.actions).view(-1)
             if args.use_huber_loss:
                 qf1_loss = F.smooth_l1_loss(qf1_a_values, next_q_value, beta=args.huber_delta)
             else:
                 qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
+            if args.double_Q:
+                qf2_a_values = qf2(data.observations, data.actions).view(-1)
+                if args.use_huber_loss:
+                    qf2_loss = F.smooth_l1_loss(qf2_a_values, next_q_value, beta=args.huber_delta)
+                else:
+                    qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
+                qf_loss = qf1_loss + qf2_loss
+            else:
+                qf_loss = qf1_loss
 
             # optimize the model
             q_optimizer.zero_grad()
-            qf1_loss.backward()
+            qf_loss.backward()
             q_optimizer.step()
 
             if global_step % args.policy_frequency == 0:
@@ -536,6 +580,9 @@ def train(args):
                     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
                 for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
                     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
+                if args.double_Q:
+                    for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
+                        target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
 
             # if not args.env_in_mppi and (global_step % args.transition_frequency == 0):
             if args.mppi and not args.env_in_mppi and args.horizon > 0:
@@ -552,7 +599,11 @@ def train(args):
 
             if global_step % 100 == 0:
                 writer.add_scalar("losses/qf1_values", qf1_a_values.mean().item(), global_step)
-                writer.add_scalar("losses/qf1_loss", qf1_loss.item(), global_step)
+                if args.double_Q:
+                    writer.add_scalar("losses/qf2_values", qf2_a_values.mean().item(), global_step)
+                    writer.add_scalar("losses/qf1_loss", qf1_loss.item(), global_step)    
+                    writer.add_scalar("losses/qf2_loss", qf2_loss.item(), global_step)
+                writer.add_scalar("losses/qf_loss", qf_loss.item(), global_step)
                 writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
                 writer.add_scalar("losses/dynamics_loss", dynamics_loss.item(), global_step)
                 writer.add_scalar("losses/reward_loss", reward_loss.item(), global_step)
