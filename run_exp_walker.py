@@ -13,7 +13,7 @@ if __name__ == "__main__":
     args.total_timesteps = 500000
     args.lambda_ = 0.1
     args.transition_network = "medium"
-    args.transition_ensemble_size = None
+    args.transition_ensemble_size = 2
     args.mppi_handle_terminations = True
     args.trainer_scaler = 'standard'
     args.distributional_dynamics = False
@@ -21,11 +21,12 @@ if __name__ == "__main__":
     args.mppi_prior = 'gaussian'
     args.batch_size = 32
     args.horizon = 4
-    args.num_rollouts = 200 # 200 (previous experiments) or 500 (30% slower)
+    args.num_rollouts = 300 # 200 (previous experiments) or 500 (30% slower)
     args.num_target_rollouts = int(args.num_rollouts // 10)
     args.var = 0.1 # 0.1 (previous experiments) or 0.05 (seems to actually train on walker)
-    args.double_Q = True
+    # args.double_Q = True
     args.learning_rate = 1e-3
+    args.episodic_learning = True
     for seed in range(5):
         for double_Q in [True, False]:
             args.double_Q = double_Q

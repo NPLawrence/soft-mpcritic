@@ -306,7 +306,7 @@ def update_mppi(
 
     actor_loss = torch.tensor([0.])
 
-    return qf1_a_values, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss
+    return qf1_a_values, qf1_loss, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss
 
 def train(args):
     # args = tyro.cli(Args)
@@ -638,7 +638,7 @@ def train(args):
                         since_last_done = global_step - last_done_global_step
                         for k in range(since_last_done):
                             effective_global_step = last_done_global_step + k
-                            qf1_a_values, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss = update_mppi(
+                            qf1_a_values, qf1_loss, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss = update_mppi(
                                 args,
                                 effective_global_step,
                                 target_network_frequency,
@@ -659,7 +659,7 @@ def train(args):
                     else:
                         pass
                 else:
-                    qf1_a_values, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss = update_mppi(
+                    qf1_a_values, qf1_loss, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss = update_mppi(
                         args,
                         global_step,
                         target_network_frequency,
