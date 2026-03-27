@@ -70,6 +70,11 @@ class Args:
     """timestep to start learning"""
     policy_frequency: int = 2
     """the frequency of training policy (delayed)"""
+    double_Q: bool = False
+    """use double Q-learning approach with mpp"""
+    target_network_frequency: Optional[int] = None
+    """the frequency of updates for the target nerworks; defaults to policy_frequency when unset"""
+    """"""
 
     # MPPI arguments
     mppi: bool = True
@@ -151,8 +156,8 @@ class Args:
     """minimum log-variance clamp for distributional dynamics"""
     dynamics_dist_max_logvar: float = 2.0
     """maximum log-variance clamp for distributional dynamics"""
-    double_Q: bool = False
-    """use double Q-learning approach with mpp"""
+    episodic_learning: bool = False
+    """whether to update all learnable components at end of episode (True) or while online (False)"""
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
     def thunk():
@@ -203,6 +208,105 @@ class Actor(nn.Module):
         x = torch.tanh(self.fc_mu(x))
         return x * self.action_scale + self.action_bias
 
+def update_mppi(
+        args,
+        global_step,
+        target_network_frequency,
+        rb,
+        qf1,
+        qf1_target,
+        q_optimizer,
+        target_mppi1,
+        target_horizon,
+        mppi_target_iterations,
+        transition_trainer,
+        qf2,
+        qf2_target,
+        target_mppi2,
+    ):
+    data, batch_inds, env_indices = rb.sample(args.batch_size)
+    with torch.no_grad():
+        if args.mppi and args.mppi_targets:
+            mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
+            
+            if args.mppi_target_warmstart:
+                qf1_next_target, next_Us1 = target_mppi1.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
+                if args.double_Q:
+                    qf2_next_target, next_Us2 = target_mppi2.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
+            else:
+                qf1_next_target, next_Us1 = target_mppi1.get_value(mppi_next_observations, U_init=None, num_iters=mppi_target_iterations)
+                if args.double_Q:
+                    qf2_next_target, next_Us2 = target_mppi2.get_value(mppi_next_observations, U_init=None, num_iters=mppi_target_iterations)
+
+            if args.double_Q:
+                qf_next_target = torch.concat([qf1_next_target, qf2_next_target], dim=1)
+                next_Us_target = torch.concat([next_Us1, next_Us2], dim=1)
+                min_qf_next_target, indices = torch.min(qf_next_target, dim=1)
+                indices_expanded = indices[:, None, None, None].expand(-1, 1, next_Us_target.shape[2], next_Us_target.shape[3])
+                next_Us = next_Us_target.gather(1, indices_expanded)
+            else:
+                min_qf_next_target, next_Us = qf1_next_target, next_Us1
+
+            rb.Us[batch_inds, env_indices, 1:target_horizon+1] = next_Us[:,0,:target_horizon] # copy over solution offset by 1 step
+            next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
+        # else:
+        #     next_state_actions = target_actor(data.next_observations)
+        #     qf1_next_target = qf1_target(data.next_observations, next_state_actions)
+        #     if args.double_Q:
+        #         qf2_next_target = qf2_target(data.next_observations, next_state_actions)
+        #         min_qf_next_target = torch.min(qf1_next_target, qf2_next_target)
+        #     else:
+        #         min_qf_next_target = qf1_next_target
+        #     next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
+
+    qf1_a_values = qf1(data.observations, data.actions).view(-1)
+    if args.use_huber_loss:
+        qf1_loss = F.smooth_l1_loss(qf1_a_values, next_q_value, beta=args.huber_delta)
+    else:
+        qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
+    if args.double_Q:
+        qf2_a_values = qf2(data.observations, data.actions).view(-1)
+        if args.use_huber_loss:
+            qf2_loss = F.smooth_l1_loss(qf2_a_values, next_q_value, beta=args.huber_delta)
+        else:
+            qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
+        qf_loss = qf1_loss + qf2_loss
+    else:
+        qf_loss = qf1_loss
+        qf2_a_values = torch.zeros_like(qf1_a_values)
+        qf2_loss = torch.zeros_like(qf1_loss)
+
+    # optimize the model
+    q_optimizer.zero_grad()
+    qf_loss.backward()
+    q_optimizer.step()
+
+    if global_step % target_network_frequency == 0:
+        # # update the target network
+        # for param, target_param in zip(actor.parameters(), target_actor.parameters()):
+        #     target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
+        for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
+            target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
+        if args.double_Q:
+            for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
+                target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
+
+    # if not args.env_in_mppi and (global_step % args.transition_frequency == 0):
+    if args.mppi and not args.env_in_mppi and args.horizon > 0:
+        dynamics_loss, reward_loss = transition_trainer.update(data)
+        for _ in range(args.transition_utd-1):
+            data, _, _ = rb.sample(args.batch_size)
+            dynamics_loss, reward_loss = transition_trainer.update(data)
+        # for _ in range(args.transition_utd):
+        #     data, _, _ = rb.sample(args.transition_batch_size)
+        #     dynamics_loss, reward_loss = transition_trainer.update(data)
+    else:
+        reward_loss = torch.tensor([0.])
+        dynamics_loss = torch.tensor([0.])
+
+    actor_loss = torch.tensor([0.])
+
+    return qf1_a_values, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss
 
 def train(args):
     # args = tyro.cli(Args)
@@ -269,6 +373,9 @@ def train(args):
     if args.double_Q:
         qf2 = QNetwork(envs).to(device)
         qf2_target = QNetwork(envs).to(device)
+    else:
+        qf2 = None
+        qf2_target = None
     model_loss = nn.SmoothL1Loss(beta=args.huber_delta) if args.use_huber_loss else nn.MSELoss()
     target_actor = Actor(envs).to(device)
     target_actor.load_state_dict(actor.state_dict())
@@ -280,6 +387,7 @@ def train(args):
         q_optimizer = optimizer_class(list(qf1.parameters()), lr=args.learning_rate)
     actor_optimizer = optimizer_class(list(actor.parameters()), lr=args.learning_rate)
 
+    target_network_frequency = args.policy_frequency if args.target_network_frequency is None else args.target_network_frequency
     transition_ensemble_size = max(args.horizon, 1) if args.transition_ensemble_size is None else args.transition_ensemble_size
     if transition_ensemble_size < 1:
         raise ValueError(f"transition_ensemble_size must be >= 1, got {transition_ensemble_size}.")
@@ -316,7 +424,7 @@ def train(args):
                                              B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
                                              lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
         else:
-            transition_optimizer = optimizer_class
+            transition_optimizer = Adam if args.model_optimizer == "adam" else SOAP
             if transition_ensemble_size > 1:
                 if args.transition_network == 'flex':
                     transition_model = FlexEnsembleDynamicsModel(
@@ -446,6 +554,10 @@ def train(args):
                         target_mppi2 = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf2_target, mu=target_actor,
                                                  B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
                                                  lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                else:
+                    target_mppi2 = None
+            else:
+                target_mppi1 = None
 
     rb = WarmstartReplayBuffer(
         args.buffer_size,
@@ -459,6 +571,7 @@ def train(args):
 
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=args.seed)
+    last_done_global_step = args.learning_starts
     if args.capture_video:
         envs.envs[0].render()
     for global_step in range(args.total_timesteps):
@@ -517,32 +630,54 @@ def train(args):
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
-            data, batch_inds, env_indices = rb.sample(args.batch_size)
-            with torch.no_grad():
-                if args.mppi and args.mppi_targets:
-                    mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
-                    
-                    if args.mppi_target_warmstart:
-                        qf1_next_target, next_Us1 = target_mppi1.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
-                        if args.double_Q:
-                            qf2_next_target, next_Us2 = target_mppi2.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
+            if args.mppi:
+                if args.episodic_learning:
+                    episode_ended = ("final_info" in infos)
+                    is_first_update = (global_step == args.learning_starts + 1)
+                    if episode_ended or is_first_update:
+                        since_last_done = global_step - last_done_global_step
+                        for k in range(since_last_done):
+                            effective_global_step = last_done_global_step + k
+                            qf1_a_values, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss = update_mppi(
+                                args,
+                                effective_global_step,
+                                target_network_frequency,
+                                rb,
+                                qf1,
+                                qf1_target,
+                                q_optimizer,
+                                target_mppi1,
+                                target_horizon,
+                                mppi_target_iterations,
+                                transition_trainer,
+                                qf2,
+                                qf2_target,
+                                target_mppi2,
+                            )
+                        if episode_ended:
+                            last_done_global_step = global_step
                     else:
-                        qf1_next_target, next_Us1 = target_mppi1.get_value(mppi_next_observations, U_init=None, num_iters=mppi_target_iterations)
-                        if args.double_Q:
-                            qf2_next_target, next_Us2 = target_mppi2.get_value(mppi_next_observations, U_init=None, num_iters=mppi_target_iterations)
-
-                    if args.double_Q:
-                        qf_next_target = torch.concat([qf1_next_target, qf2_next_target], dim=1)
-                        next_Us_target = torch.concat([next_Us1, next_Us2], dim=1)
-                        min_qf_next_target, indices = torch.min(qf_next_target, dim=1)
-                        indices_expanded = indices[:, None, None, None].expand(-1, 1, next_Us_target.shape[2], next_Us_target.shape[3])
-                        next_Us = next_Us_target.gather(1, indices_expanded)
-                    else:
-                        min_qf_next_target, next_Us = qf1_next_target, next_Us1
-
-                    rb.Us[batch_inds, env_indices, 1:target_horizon+1] = next_Us[:,0,:target_horizon] # copy over solution offset by 1 step
-                    next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
+                        pass
                 else:
+                    qf1_a_values, qf_loss, actor_loss, dynamics_loss, reward_loss, qf2_a_values, qf2_loss = update_mppi(
+                        args,
+                        global_step,
+                        target_network_frequency,
+                        rb,
+                        qf1,
+                        qf1_target,
+                        q_optimizer,
+                        target_mppi1,
+                        target_horizon,
+                        mppi_target_iterations,
+                        transition_trainer,
+                        qf2,
+                        qf2_target,
+                        target_mppi2,
+                    )
+            else:
+                data, batch_inds, env_indices = rb.sample(args.batch_size)
+                with torch.no_grad():
                     next_state_actions = target_actor(data.next_observations)
                     qf1_next_target = qf1_target(data.next_observations, next_state_actions)
                     if args.double_Q:
@@ -552,57 +687,48 @@ def train(args):
                         min_qf_next_target = qf1_next_target
                     next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
 
-            qf1_a_values = qf1(data.observations, data.actions).view(-1)
-            if args.use_huber_loss:
-                qf1_loss = F.smooth_l1_loss(qf1_a_values, next_q_value, beta=args.huber_delta)
-            else:
-                qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
-            if args.double_Q:
-                qf2_a_values = qf2(data.observations, data.actions).view(-1)
+                qf1_a_values = qf1(data.observations, data.actions).view(-1)
                 if args.use_huber_loss:
-                    qf2_loss = F.smooth_l1_loss(qf2_a_values, next_q_value, beta=args.huber_delta)
+                    qf1_loss = F.smooth_l1_loss(qf1_a_values, next_q_value, beta=args.huber_delta)
                 else:
-                    qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
-                qf_loss = qf1_loss + qf2_loss
-            else:
-                qf_loss = qf1_loss
+                    qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
+                if args.double_Q:
+                    qf2_a_values = qf2(data.observations, data.actions).view(-1)
+                    if args.use_huber_loss:
+                        qf2_loss = F.smooth_l1_loss(qf2_a_values, next_q_value, beta=args.huber_delta)
+                    else:
+                        qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
+                    qf_loss = qf1_loss + qf2_loss
+                else:
+                    qf_loss = qf1_loss
 
-            # optimize the model
-            q_optimizer.zero_grad()
-            qf_loss.backward()
-            q_optimizer.step()
-            actor_loss = torch.tensor(float("nan"), device=device)
+                # optimize the model
+                q_optimizer.zero_grad()
+                qf_loss.backward()
+                q_optimizer.step()
+                actor_loss = torch.tensor(float("nan"), device=device)
 
-            if global_step % args.policy_frequency == 0:
-                if (not args.mppi) or (args.mppi_control_mode == "mu"):
-                    actor_loss = -qf1(data.observations, actor(data.observations)).mean()
-                    actor_optimizer.zero_grad()
-                    actor_loss.backward()
-                    actor_optimizer.step()
+                if global_step % args.policy_frequency == 0:
+                    if (not args.mppi) or (args.mppi_control_mode == "mu"):
+                        actor_loss = -qf1(data.observations, actor(data.observations)).mean()
+                        actor_optimizer.zero_grad()
+                        actor_loss.backward()
+                        actor_optimizer.step()
 
-                    # update the target actor only when actor is trained
-                    for param, target_param in zip(actor.parameters(), target_actor.parameters()):
-                        target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
+                    if global_step % target_network_frequency == 0:
+                        # update the target actor only when actor is trained
+                            for param, target_param in zip(actor.parameters(), target_actor.parameters()):
+                                target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
+
+                    reward_loss = torch.tensor([0.])
+                    dynamics_loss = torch.tensor([0.])
 
                 # always update the target critic
-                for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
-                    target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
-                if args.double_Q:
-                    for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
+                    for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
                         target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
-
-            # if not args.env_in_mppi and (global_step % args.transition_frequency == 0):
-            if args.mppi and not args.env_in_mppi and args.horizon > 0:
-                dynamics_loss, reward_loss = transition_trainer.update(data)
-                for _ in range(args.transition_utd-1):
-                    data, _, _ = rb.sample(args.batch_size)
-                    dynamics_loss, reward_loss = transition_trainer.update(data)
-                # for _ in range(args.transition_utd):
-                #     data, _, _ = rb.sample(args.transition_batch_size)
-                #     dynamics_loss, reward_loss = transition_trainer.update(data)
-            else:
-                reward_loss = torch.tensor([0.])
-                dynamics_loss = torch.tensor([0.])
+                    if args.double_Q:
+                        for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
+                            target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
 
             if global_step % 100 == 0:
                 writer.add_scalar("losses/qf1_values", qf1_a_values.mean().item(), global_step)
