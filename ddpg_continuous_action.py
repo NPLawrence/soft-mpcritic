@@ -263,6 +263,9 @@ def train(args):
     actor = Actor(envs).to(device)
     qf1 = QNetwork(envs).to(device)
     qf1_target = QNetwork(envs).to(device)
+    if args.model_optimizer not in {"adam", "soap"}:
+        raise ValueError(f"Invalid model_optimizer={args.model_optimizer}. Expected one of 'adam', 'soap'.")
+    optimizer_class = Adam if args.model_optimizer == "adam" else SOAP
     if args.double_Q:
         qf2 = QNetwork(envs).to(device)
         qf2_target = QNetwork(envs).to(device)
@@ -272,10 +275,10 @@ def train(args):
     qf1_target.load_state_dict(qf1.state_dict())
     if args.double_Q:
         qf2_target.load_state_dict(qf2.state_dict())
-        q_optimizer = Adam(list(qf1.parameters()) + list(qf2.parameters()), lr=args.learning_rate)
+        q_optimizer = optimizer_class(list(qf1.parameters()) + list(qf2.parameters()), lr=args.learning_rate)
     else:
-        q_optimizer = Adam(list(qf1.parameters()), lr=args.learning_rate)
-    actor_optimizer = Adam(list(actor.parameters()), lr=args.learning_rate)
+        q_optimizer = optimizer_class(list(qf1.parameters()), lr=args.learning_rate)
+    actor_optimizer = optimizer_class(list(actor.parameters()), lr=args.learning_rate)
 
     transition_ensemble_size = max(args.horizon, 1) if args.transition_ensemble_size is None else args.transition_ensemble_size
     if transition_ensemble_size < 1:

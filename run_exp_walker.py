@@ -25,6 +25,9 @@ if __name__ == "__main__":
     args.num_target_rollouts = int(args.num_rollouts // 10)
     args.var = 0.1 # 0.1 (previous experiments) or 0.05 (seems to actually train on walker)
     args.double_Q = True
+    args.learning_rate = 1e-3
     for seed in range(5):
-        args.seed = seed
-        train(args)
+        for double_Q in [True, False]:
+            args.double_Q = double_Q
+            args.seed = seed
+            train(args)
