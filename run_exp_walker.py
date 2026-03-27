@@ -1,4 +1,5 @@
-from ddpg_continuous_action import Args, train
+# from ddpg_continuous_action import Args, train
+from ddpg_continuous_action_v2 import Args, train
 
 if __name__ == "__main__":
     args = Args()

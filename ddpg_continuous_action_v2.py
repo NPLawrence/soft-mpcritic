@@ -156,8 +156,8 @@ class Args:
     """minimum log-variance clamp for distributional dynamics"""
     dynamics_dist_max_logvar: float = 2.0
     """maximum log-variance clamp for distributional dynamics"""
-    training_pattern: str = 'online'
-    """mppi training pattern for model and Q, one of 'online', 'only_model_episodic', 'episodic_model_first', 'episodic'"""
+    training_pattern: str = ''
+    """mppi training pattern for model and Q, '' is prior default, otherwise one of 'online', 'only_model_episodic', 'episodic_model_first', 'episodic'"""
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_kwargs={}):
     def thunk():
