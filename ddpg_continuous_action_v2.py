@@ -230,9 +230,11 @@ def update_mppi(
             mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
             
             if args.mppi_target_warmstart:
-                qf1_next_target, next_Us1 = target_mppi1.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
+                # initialize action sequence at s with shifted solution at s'
+                U_init=data.Us[:,1:target_horizon+2]
+                qf1_next_target, next_Us1 = target_mppi1.get_value(mppi_next_observations, U_init=U_init, num_iters=mppi_target_iterations)
                 if args.double_Q:
-                    qf2_next_target, next_Us2 = target_mppi2.get_value(mppi_next_observations, U_init=data.Us[:,:target_horizon+1], num_iters=mppi_target_iterations)
+                    qf2_next_target, next_Us2 = target_mppi2.get_value(mppi_next_observations, U_init=U_init, num_iters=mppi_target_iterations)
             else:
                 qf1_next_target, next_Us1 = target_mppi1.get_value(mppi_next_observations, U_init=None, num_iters=mppi_target_iterations)
                 if args.double_Q:
@@ -247,7 +249,12 @@ def update_mppi(
             else:
                 min_qf_next_target, next_Us = qf1_next_target, next_Us1
 
-            rb.Us[batch_inds, env_indices, 1:target_horizon+1] = next_Us[:,0,:target_horizon] # copy over solution offset by 1 step
+            if target_horizon < args.horizon:
+                rb.Us[batch_inds, env_indices, 1:target_horizon+2] = next_Us[:,0,:target_horizon+1] # copy over solution offset by 1 step, including time step
+            elif target_horizon == args.horizon:
+                rb.Us[batch_inds, env_indices, 1:target_horizon+1] = next_Us[:,0,:target_horizon] # copy over solution offset by 1 step
+            else:
+                raise NotImplementedError(f"Not implemented target_horizon > horizon. Got target_horizon={target_horizon} and horizon={args.horizon}.")
             next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (min_qf_next_target).view(-1)
         # else:
         #     next_state_actions = target_actor(data.next_observations)
@@ -770,7 +777,8 @@ if __name__ == "__main__":
     args.track = False
     args.env_in_mppi = False
     args.horizon = 4
+    args.target_horizon = 0
     args.num_rollouts = 200
     args.num_target_rollouts = 20
-    args.training_pattern = ''
+    # args.training_pattern = 'online'
     train(args)

@@ -303,7 +303,7 @@ class MPPITrainer:
             if args.mppi and args.mppi_targets:
                 mppi_next_observations = data.next_observations.reshape(args.batch_size, -1)
 
-                U_init = data.Us[:, :self.target_horizon + 1] if args.mppi_target_warmstart else None
+                U_init = data.Us[:, 1:self.target_horizon + 2] if args.mppi_target_warmstart else None
 
                 qf1_next_target, next_Us1 = self.target_mppi1.get_value(
                     mppi_next_observations, U_init=U_init, num_iters=self.mppi_target_iterations
@@ -324,7 +324,13 @@ class MPPITrainer:
                 else:
                     min_qf_next_target, next_Us = qf1_next_target, next_Us1
 
-                self.rb.Us[batch_inds, env_indices, 1:self.target_horizon + 1] = next_Us[:, 0, :self.target_horizon]
+                # self.rb.Us[batch_inds, env_indices, 1:self.target_horizon + 1] = next_Us[:, 0, :self.target_horizon]
+                if self.target_horizon < args.horizon:
+                    self.rb.Us[batch_inds, env_indices, 1:self.target_horizon+2] = next_Us[:,0,:self.target_horizon+1] # copy over solution offset by 1 step, including time step
+                elif self.target_horizon == args.horizon:
+                    self.rb.Us[batch_inds, env_indices, 1:self.target_horizon+1] = next_Us[:,0,:self.target_horizon] # copy over solution offset by 1 step
+                else:
+                    raise NotImplementedError(f"Not implemented target_horizon > horizon. Got target_horizon={self.target_horizon} and horizon={args.horizon}.")
                 next_q_value = (
                     data.rewards.flatten()
                     + (1 - data.dones.flatten()) * args.gamma * min_qf_next_target.view(-1)
