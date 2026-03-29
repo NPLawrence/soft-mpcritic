@@ -69,7 +69,7 @@ class MPPI():
         self.rollout_model_indices = None
 
     @torch.no_grad()
-    def make_step(self, observation, mode="action", roll=True):
+    def make_step(self, observation, mode="action"):
         """return action for given observation"""
         obs_tensor = torch.tensor(observation, dtype=self.dtype)
         if obs_tensor.ndim == 2:
@@ -80,9 +80,9 @@ class MPPI():
             raise ValueError(f"Expected observation shape [B,ns] or [B,1,ns], got {tuple(obs_tensor.shape)}")
 
         # initialize action sequence with previous solution
-        if roll:
-            self.U = torch.roll(self.U, -1, dims=2)
-            self.U[:, :, -1] = self.u_init
+        # if roll:
+        #     self.U = torch.roll(self.U, -1, dims=2)
+        #     self.U[:, :, -1] = self.u_init
         if self.control_mode == "mean_residual":
             self.mean_U = torch.mean(self.U, dim=2, keepdim=True)  # [B, 1, 1, nu]
             self.delta_U = self.U - self.mean_U
@@ -99,7 +99,7 @@ class MPPI():
             self._sync_envs()
 
         if self.transition_model is not None and hasattr(self.transition_model, "ensemble_size") and self.ensemble_rollout_mode == "trajectory":
-            if roll or self.rollout_model_indices is None:
+            if self.rollout_model_indices is None:
                 self.rollout_model_indices = torch.randint(
                     self.transition_model.ensemble_size,
                     (self.B * self.K,),
@@ -165,17 +165,22 @@ class MPPI():
 
     @torch.no_grad()
     def get_action(self, observation, num_iters=1):
-        action = self.make_step(observation, mode='action')
-        for _ in range(num_iters-1):
-            action = self.make_step(observation, mode='action', roll=False)
+        # initialize action sequence with previous solution
+        self.U = torch.roll(self.U, -1, dims=2)
+        self.U[:, :, -1] = self.u_init
+        for _ in range(num_iters):
+            action = self.make_step(observation, mode='action')
         return action
 
     @torch.no_grad()
-    def get_value(self, observation, U_init=None, num_iters=1):
+    def get_value(self, observation, U_init=None, num_iters=1, roll=True):
+        # initialize action sequence with previous solution
+        if roll and U_init is not None:
+            U_init = torch.roll(U_init, -1, dims=1)
+            U_init[:, -1] = self.u_init
         self.reset(U_init)
-        self.make_step(observation, mode='value')
-        for _ in range(num_iters-1):
-            self.make_step(observation, mode='value', roll=False)
+        for _ in range(num_iters):
+            self.make_step(observation, mode='value')
         return self.value, self.U
 
     def _compute_rollout_costs_batched(self):
@@ -361,7 +366,15 @@ class MPPI():
 
     def reset(self, U_init=None):
         """reinitialize all MPPI computations"""
-        self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) if U_init is None else U_init.view((self.B, 1, self.T+1, self.nu))
+        if U_init is None:
+            self.U = self.noise_dist.sample((self.B, 1, self.T+1,))
+        else:
+            B, init_len, nu  = U_init.shape
+            if init_len < self.T+1:
+                u_next = self.u_init[None, None, :].expand(B, 1, -1)
+                for _ in range(self.T+1 - init_len):
+                    U_init = torch.cat([U_init, u_next], dim=1)
+            self.U = U_init.view((self.B, 1, self.T+1, self.nu))
         self.last_U = self.u_init * torch.ones_like(self.U)
         self.last_action = self.u_init * torch.ones_like(self.U[:,:,0])
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
