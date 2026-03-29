@@ -184,7 +184,7 @@ class QNetwork(nn.Module):
     def forward(self, x, a):
         x = torch.cat([x, a], 1)
         x = F.silu(self.fc1(x))
-        x = F.tanh(self.fc2(x))
+        x = F.silu(self.fc2(x))
         x = self.fc3(x)
         return x
 
@@ -734,19 +734,19 @@ def train(args):
                 writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
                 writer.add_scalar("losses/dynamics_loss", dynamics_loss.item(), global_step)
                 writer.add_scalar("losses/reward_loss", reward_loss.item(), global_step)
-                if "transition_model" in locals():
-                    with torch.no_grad():
-                        if hasattr(transition_model, "predict_distribution"):
-                            _, _, pred_logvar = transition_model.predict_distribution(data.observations, data.actions)
-                            writer.add_scalar("losses/dynamics_logvar_mean", pred_logvar.mean().item(), global_step)
-                        elif hasattr(transition_model, "models"):
-                            member_logvars = []
-                            for member_model in transition_model.models:
-                                if hasattr(member_model, "predict_distribution"):
-                                    _, _, member_logvar = member_model.predict_distribution(data.observations, data.actions)
-                                    member_logvars.append(member_logvar.mean())
-                            if len(member_logvars) > 0:
-                                writer.add_scalar("losses/dynamics_logvar_mean", torch.stack(member_logvars).mean().item(), global_step)
+                # if "transition_model" in locals():
+                #     with torch.no_grad():
+                #         if hasattr(transition_model, "predict_distribution"):
+                #             _, _, pred_logvar = transition_model.predict_distribution(data.observations, data.actions)
+                #             writer.add_scalar("losses/dynamics_logvar_mean", pred_logvar.mean().item(), global_step)
+                #         elif hasattr(transition_model, "models"):
+                #             member_logvars = []
+                #             for member_model in transition_model.models:
+                #                 if hasattr(member_model, "predict_distribution"):
+                #                     _, _, member_logvar = member_model.predict_distribution(data.observations, data.actions)
+                #                     member_logvars.append(member_logvar.mean())
+                #             if len(member_logvars) > 0:
+                #                 writer.add_scalar("losses/dynamics_logvar_mean", torch.stack(member_logvars).mean().item(), global_step)
                 print("SPS:", int(global_step / (time.time() - start_time)))
                 writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
