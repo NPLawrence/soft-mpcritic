@@ -25,7 +25,7 @@ if __name__ == "__main__":
     args.num_rollouts = 200 # 200 (previous experiments) or 500 (30% slower)
     args.num_target_rollouts = int(args.num_rollouts // 10)
     args.var = 0.1 # 0.1 (previous experiments) or 0.05 (seems to actually train on walker)
-    args.double_Q = False
+    args.double_Q = True
     args.learning_rate = 1e-3
     # args.episodic_learning = True
     args.target_horizon = 0
