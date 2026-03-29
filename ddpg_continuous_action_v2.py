@@ -777,7 +777,7 @@ if __name__ == "__main__":
     args.track = False
     args.env_in_mppi = False
     args.horizon = 4
-    args.target_horizon = 0
+    args.target_horizon = 4
     args.num_rollouts = 200
     args.num_target_rollouts = 20
     # args.training_pattern = 'online'

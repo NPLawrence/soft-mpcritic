@@ -173,7 +173,7 @@ class MPPI():
         return action
 
     @torch.no_grad()
-    def get_value(self, observation, U_init=None, num_iters=1, roll=True):
+    def get_value(self, observation, U_init=None, num_iters=1, roll=False):
         # initialize action sequence with previous solution
         if roll and U_init is not None:
             U_init = torch.roll(U_init, -1, dims=1)
