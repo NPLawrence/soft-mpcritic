@@ -5,12 +5,14 @@ import wandb
 api = wandb.Api()
 
 # Project is specified by <entity/project-name>
-project = 'dual_mpcritic_ddpg_sps' # 'dual_mpcritic_ddpg_new_value_with_discount'
+project = 'dual_mpcritic_ddpg_hopper' # 'ddpg_baseline' # 'sac_baseline' # 'dual_mpcritic_ddpg_sps' # 'dual_mpcritic_ddpg_new_value_with_discount'
 runs = api.runs(f"mpcritic-dpc/{project}")
 
 # summary_list, config_list, name_list = [], [], []
 run_name_list = []
 env_id_list = []
+batch_size_list = []
+# mppi experiments
 mppi_online_list = []
 Q_in_mppi_list = []
 num_rollouts_list = []
@@ -21,12 +23,18 @@ target_horizon_list = []
 transition_ensemble_size_list = []
 mppi_target_warmstart_list = []
 mppi_target_iterations_list = []
+training_pattern_list = []
+# sac experiments
+# autotune_list = []
+# all experiments
 episodic_return_list = []
 global_step_list = []
 sps_list = []
 dataset = {
     "run_name": run_name_list,
     "env_id": env_id_list,
+    "batch_size": batch_size_list,
+    # mppi experiments
     "mppi_online": mppi_online_list,
     "Q_in_mppi": Q_in_mppi_list,
     "num_rollouts": num_rollouts_list,
@@ -37,11 +45,15 @@ dataset = {
     "transition_ensemble_size": transition_ensemble_size_list,
     "mppi_target_warmstart": mppi_target_warmstart_list,
     "mppi_target_iterations": mppi_target_iterations_list,
+    "training_pattern": training_pattern_list,
+    # sac experiments
+    # "autotune": autotune_list,
+    # all experiments
     "episodic_return": episodic_return_list,
     "global_step": global_step_list,
     "sps": sps_list
 }
-for (i, run) in enumerate(runs):
+for (i, run) in enumerate(list(runs)):
     # .summary contains the output keys/values for metrics like accuracy.
     #  We call ._json_dict to omit large files
     # summary_list.append(run.summary._json_dict)
@@ -54,6 +66,7 @@ for (i, run) in enumerate(runs):
 
         run_name_list.append(run.name)
         env_id_list.append(config['env_id'])
+        batch_size_list.append(config['batch_size'])
         mppi_online_list.append(config['mppi_online'])
         Q_in_mppi_list.append(config['Q_in_mppi'])
         num_rollouts_list.append(config['num_rollouts'])
@@ -64,6 +77,8 @@ for (i, run) in enumerate(runs):
         transition_ensemble_size_list.append(config['transition_ensemble_size'])
         mppi_target_warmstart_list.append(config['mppi_target_warmstart'])
         mppi_target_iterations_list.append(config['mppi_target_iterations'])
+        training_pattern_list.append(config['training_pattern'])
+        # autotune_list.append(config['autotune'])
 
         history = run.scan_history(keys=["charts/episodic_return","global_step"])
         episodic_return = [row["charts/episodic_return"] for row in history if row["charts/episodic_return"] is not None]
