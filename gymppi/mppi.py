@@ -131,7 +131,7 @@ class MPPI():
         cost_total_non_zero = torch.exp(-(1.0 / self.lambda_) * (cost_total - beta))  # [B, K]
 
         if mode == 'value':
-            logsumexp = torch.log(torch.sum(cost_total_non_zero, dim=1))           # [B]
+            logsumexp = torch.log(torch.sum(cost_total_non_zero, dim=1) / self.K)  # [B], expectation over prior
             term1 = -self.lambda_ * (-beta.squeeze(1) / self.lambda_ + logsumexp)
             term2 = self.lambda_ / 2 * torch.sum(
                 self.discounting.view(1, 1, -1, 1) * perturbation_base * (perturbation_base @ self.inv_cov),

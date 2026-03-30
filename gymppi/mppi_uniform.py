@@ -171,7 +171,7 @@ class UniformMPPI():
             # Free energy: F* = -λ log E_p[exp(-S/λ)], estimated via IS from q.
             # term1 already uses IS-corrected costs (perturbation_cost included);
             # there is no U-dependent term2 (unlike Gaussian-prior MPPI).
-            logsumexp = torch.log(torch.sum(cost_total_non_zero, dim=1))           # [B]
+            logsumexp = torch.log(torch.sum(cost_total_non_zero, dim=1) / self.K)  # [B], expectation over prior
             term1 = -self.lambda_ * (-beta.squeeze(1) / self.lambda_ + logsumexp)
             additive_constant = torch.sum(self.discounting) * self.lambda_ * (
                 self.log_gaussian_normalizer + self.log_uniform_volume
@@ -410,7 +410,15 @@ class UniformMPPI():
 
     def reset(self, U_init=None):
         """reinitialize all MPPI computations"""
-        self.U = self.noise_dist.sample((self.B, 1, self.T+1,)) if U_init is None else U_init.view((self.B, 1, self.T+1, self.nu))
+        if U_init is None:
+            self.U = self.noise_dist.sample((self.B, 1, self.T+1,))
+        else:
+            B, init_len, nu  = U_init.shape
+            if init_len < self.T+1:
+                u_next = self.u_init[None, None, :].expand(B, 1, -1)
+                for _ in range(self.T+1 - init_len):
+                    U_init = torch.cat([U_init, u_next], dim=1)
+            self.U = U_init.view((self.B, 1, self.T+1, self.nu))
         self.last_U = self.u_init * torch.ones_like(self.U)
         self.last_action = self.u_init * torch.ones_like(self.U[:,:,0])
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
