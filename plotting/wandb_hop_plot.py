@@ -9,7 +9,7 @@ runs_df = pd.read_pickle(f"data/{project}_all_data.pkl")
 print(runs_df['episodic_return'].iloc[0])
 
 data_env = runs_df[(runs_df['env_id']=='Hopper-v5')]
-data_target_r20 = data_env[(data_env['num_target_rollouts']==20)]
+data_target_r20 = data_env[(data_env['num_target_rollouts']==20) & (data_env['num_rollouts']==200)]
 data_target_h4 = data_target_r20[(data_target_r20['target_horizon']==4)]
 data = pd.concat([data_target_h4], ignore_index=True)
 # data = pd.concat([data_target_h4.sample(n=10)], ignore_index=True)
@@ -20,8 +20,9 @@ condition_0 = (data['mppi_online'] == True)
 condition_1 = (pd.isna(data['transition_ensemble_size']))
 condition_2 = (data['Q_in_mppi'])
 condition_3 = (data['mppi_targets'])
-data.loc[condition_0 & ~condition_1 & condition_2, 'label1'] = r'$f$ Ensemble'
-data.loc[condition_0 & condition_1 & ~condition_2, 'label1'] = r'$\mathcal{Q}$'
+condition_4 = (data['horizon']==4)
+data.loc[condition_0 & condition_1 & ~condition_2 & ~condition_3 & condition_4, 'label1'] = r'$f$ Ensemble'
+data.loc[condition_0 & ~condition_1 & condition_2, 'label1'] = r'$\mathcal{Q}$'
 data.loc[condition_0 & condition_1 & condition_2 & condition_3, 'label1'] = r'$f$ Ensemble $+$ $\mathcal{Q}$'
 data['label1'] = data['label1'].astype("category")
 
@@ -135,7 +136,7 @@ axes[0].legend()
 sns.move_legend(axes[0], "lower center", title="MPPI Ingredients", bbox_to_anchor=(0.5, 1), frameon=False, ncol=1)
 
 # Plot on the second axis
-g2 = sns.lineplot(data=df_long[df_long['label2'] != ''].copy(), ax=axes[1], **subplot2_kwargs,)
+g2 = sns.lineplot(data=df_long[df_long['label2'] != ''], ax=axes[1], **subplot2_kwargs,)
 # g2.set_xlabel("Time step")
 g2.set_xlabel("")
 g2.grid(True)
