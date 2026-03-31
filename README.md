@@ -63,6 +63,10 @@ These scripts set arguments in code and execute repeated runs over seeds/hyperpa
 - W&B logs are used when `track=True`.
 - Plotting scripts are under `plotting/`.
 
+## Repository Layout Notes
+
+- Legacy or experimental code that is not part of the main paper workflows is placed under `misc/`.
+
 ## Reproducibility Notes
 
 - The repository uses `uv.lock` for pinned dependencies.
