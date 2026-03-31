@@ -3,6 +3,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+project = 'sac_baseline'
+runs_df_sac = pd.read_pickle(f"data/{project}_all_data.pkl")
+runs_df_sac = runs_df_sac[(runs_df_sac['env_id']=='InvertedDoublePendulum-v5')]
+runs_df_sac = pd.concat([runs_df_sac], ignore_index=True)
+runs_df_sac['label'] = "SAC"
+runs_df_sac['label'] = runs_df_sac['label'].astype("category")
+
 project = 'dual_mpcritic_ddpg_new_value_with_discount'
 
 runs_df = pd.read_pickle(f"data/{project}_all_data.pkl")
@@ -32,6 +39,16 @@ def padded_moving_average(df, columns, window=20, total_len=50_001):
                 df.at[i, 'global_step'] = repeated_steps[::window]
                 df.at[i, column] = repeated_values[::window]
     return df
+
+def median_final_value(df, column):
+    values = []
+    for i in range(len(df)):
+        values.append(df.at[i, column][-1])
+    values = np.array(values)
+    return np.median(values)
+
+temp_df = padded_moving_average(runs_df_sac, ['episodic_return'], window=20, total_len=1_000_001)
+sac_median_final_value = median_final_value(temp_df, 'episodic_return')
 
 data = padded_moving_average(data, ['episodic_return'])
 
@@ -80,6 +97,8 @@ lineplot_kwargs = {
 }
 
 g = sns.FacetGrid(df_long, col="mppi_target_warmstart", row="transition_ensemble_size", margin_titles=True, despine=False, legend_out=False, height=1.75, aspect=1)
+for ax in g.axes.flatten():
+    ax.axhline(y=sac_median_final_value, color="grey", dashes=(3,1), lw=1.5, label='')
 g.map_dataframe(sns.lineplot, **lineplot_kwargs)
 # g.set_axis_labels("Time step", "Reward")
 for ax in g.axes.flat:

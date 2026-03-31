@@ -46,12 +46,23 @@ def padded_moving_average(df, columns, window=20, total_len=500_001, final_len=5
                 df.at[i, column] = repeated_values[:final_len][::window]
     return df
 
+def median_final_value(df, column):
+    values = []
+    for i in range(len(df)):
+        values.append(df.at[i, column][-1])
+    values = np.array(values)
+    return np.median(values)
+
 plotted_columns = ['global_step', 'episodic_return', 'label']
+temp_df = padded_moving_average(runs_df_sac, ['episodic_return'], window=20, total_len=1_000_001, final_len=1_000_001)
+sac_median_final_value = median_final_value(temp_df, 'episodic_return')
 sac_data = runs_df_sac[plotted_columns]
 sac_data = padded_moving_average(runs_df_sac, ['episodic_return'], window=20, total_len=1_000_001)
 sac_df_long = sac_data.explode(['episodic_return', 'global_step'], ignore_index=True)
 
 ddpg_data = runs_df_ddpg[plotted_columns]
+temp_df = padded_moving_average(runs_df_ddpg, ['episodic_return'], window=20, total_len=1_000_001, final_len=1_000_001)
+ddpg_median_final_value = median_final_value(temp_df, 'episodic_return')
 ddpg_data = padded_moving_average(runs_df_ddpg, ['episodic_return'], window=20, total_len=1_000_001)
 ddpg_df_long = ddpg_data.explode(['episodic_return', 'global_step'], ignore_index=True)
 
@@ -108,11 +119,16 @@ plot_kwargs = {**lineplot_kwargs, **{
                '': (0,0)},
 }}
 
-fig, ax = plt.subplots(figsize=(3.3, 3.3))
+fig, ax = plt.subplots(figsize=(3.5,3.0))
 plt.tight_layout()
 
 # Plot on axis
+# ax.axhline(y=sac_average_final_value, color=plot_kwargs["palette"]["SAC"], dashes=plot_kwargs["dashes"]["SAC"], label='')
+# ax.axhline(y=ddpg_average_final_value, color=plot_kwargs["palette"]["DDPG"], dashes=plot_kwargs["dashes"]["DDPG"], label='')
+ax.axhline(y=sac_median_final_value, color="grey", dashes=plot_kwargs["dashes"]["SAC"], lw=1.5, label='')
+ax.axhline(y=ddpg_median_final_value, color="grey", dashes=plot_kwargs["dashes"]["DDPG"], lw=1.5, label='')
 ax = sns.lineplot(data=df_long, ax=ax, **plot_kwargs)
+
 ax.set_xlabel("Time step")
 ax.set_ylabel("Cumulative reward")
 ax.grid(True)
