@@ -247,7 +247,7 @@ wheels = [
 ]
 
 [[package]]
-name = "dual-mpcritic"
+name = "soft-mpcritic"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

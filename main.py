@@ -1,5 +1,5 @@
 def main():
-    print("Hello from dual-mpcritic!")
+    print("Hello from soft-mpcritic!")
 
 
 if __name__ == "__main__":

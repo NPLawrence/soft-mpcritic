@@ -36,7 +36,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "dual_mpcritic"
+    wandb_project_name: str = "soft_mpcritic"
     """the wandb's project name"""
     wandb_entity: Optional[str] = None
     """the entity (team) of wandb's project"""
