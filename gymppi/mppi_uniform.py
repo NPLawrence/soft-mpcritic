@@ -84,7 +84,7 @@ class UniformMPPI():
         self.rollout_model_indices = None
 
     @torch.no_grad()
-    def make_step(self, observation, mode="action", roll=True):
+    def make_step(self, observation, mode="action"):
         """return action for given observation"""
         obs_tensor = torch.tensor(observation, dtype=self.dtype)
         if obs_tensor.ndim == 2:
@@ -95,9 +95,9 @@ class UniformMPPI():
             raise ValueError(f"Expected observation shape [B,ns] or [B,1,ns], got {tuple(obs_tensor.shape)}")
 
         # initialize action sequence with previous solution
-        if roll:
-            self.U = torch.roll(self.U, -1, dims=2)
-            self.U[:, :, -1] = self.u_init
+        # if roll:
+        #     self.U = torch.roll(self.U, -1, dims=2)
+        #     self.U[:, :, -1] = self.u_init
         if self.control_mode == "mean_residual":
             self.mean_U = torch.mean(self.U, dim=2, keepdim=True)  # [B, 1, 1, nu]
             self.delta_U = self.U - self.mean_U
@@ -114,7 +114,7 @@ class UniformMPPI():
             self._sync_envs()
 
         if self.transition_model is not None and hasattr(self.transition_model, "ensemble_size") and self.ensemble_rollout_mode == "trajectory":
-            if roll or self.rollout_model_indices is None:
+            if self.rollout_model_indices is None:
                 self.rollout_model_indices = torch.randint(
                     self.transition_model.ensemble_size,
                     (self.B * self.K,),
@@ -203,17 +203,20 @@ class UniformMPPI():
 
     @torch.no_grad()
     def get_action(self, observation, num_iters=1):
-        action = self.make_step(observation, mode='action')
-        for _ in range(num_iters-1):
-            action = self.make_step(observation, mode='action', roll=False)
+        self.U = torch.roll(self.U, -1, dims=2)
+        self.U[:, :, -1] = self.u_init
+        for _ in range(num_iters):
+            action = self.make_step(observation, mode='action')
         return action
 
     @torch.no_grad()
-    def get_value(self, observation, U_init=None, num_iters=1):
+    def get_value(self, observation, U_init=None, num_iters=1, roll=False):
+        if roll and U_init is not None:
+            U_init = torch.roll(U_init, -1, dims=1)
+            U_init[:, -1] = self.u_init
         self.reset(U_init)
-        self.make_step(observation, mode='value')
-        for _ in range(num_iters-1):
-            self.make_step(observation, mode='value', roll=False)
+        for _ in range(num_iters):
+            self.make_step(observation, mode='value')
         return self.value, self.U
 
     def _compute_rollout_costs_batched(self):

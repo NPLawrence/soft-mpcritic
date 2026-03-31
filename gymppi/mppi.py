@@ -408,7 +408,7 @@ if __name__ == '__main__':
     rollout_envs = [gym.make_vec(env_id, num_envs=K, vectorization_mode="sync", wrappers=[MujocoMPPIWrapper], **env_kwargs) for _ in range(B)]
 
     cov = 0.1*torch.diag(torch.ones(np.prod(env.action_space.shape)))
-    mppi = MPPI(env, rollout_envs=rollout_envs, K=K, T=T, B=B, cov=cov, lambda_=0.1, control_mode=control_mode)
+    mppi = MPPI(env, rollout_envs=rollout_envs, K=K, T=T, B=B, cov=cov, lambda_=0.1, control_mode=control_mode, handle_terminations=False)
 
     obs, _ = env.reset(seed=0)
     env.render()
