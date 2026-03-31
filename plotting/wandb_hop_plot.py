@@ -3,13 +3,20 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+project = 'sac_baseline'
+runs_df_sac = pd.read_pickle(f"data/{project}_all_data.pkl")
+runs_df_sac = runs_df_sac[(runs_df_sac['env_id']=='Hopper-v5')]
+runs_df_sac = pd.concat([runs_df_sac], ignore_index=True)
+runs_df_sac['label'] = "SAC"
+runs_df_sac['label'] = runs_df_sac['label'].astype("category")
+
 project = 'dual_mpcritic_ddpg_new_value_with_discount'
 
 runs_df = pd.read_pickle(f"data/{project}_all_data.pkl")
 print(runs_df['episodic_return'].iloc[0])
 
 data_env = runs_df[(runs_df['env_id']=='Hopper-v5')]
-data_target_r20 = data_env[(data_env['num_target_rollouts']==20)]
+data_target_r20 = data_env[(data_env['num_target_rollouts']==20) & (data_env['num_rollouts']==200)]
 data_target_h4 = data_target_r20[(data_target_r20['target_horizon']==4)]
 data = pd.concat([data_target_h4], ignore_index=True)
 # data = pd.concat([data_target_h4.sample(n=10)], ignore_index=True)
@@ -20,8 +27,9 @@ condition_0 = (data['mppi_online'] == True)
 condition_1 = (pd.isna(data['transition_ensemble_size']))
 condition_2 = (data['Q_in_mppi'])
 condition_3 = (data['mppi_targets'])
-data.loc[condition_0 & ~condition_1 & condition_2, 'label1'] = r'$f$ Ensemble'
-data.loc[condition_0 & condition_1 & ~condition_2, 'label1'] = r'$\mathcal{Q}$'
+condition_4 = (data['horizon']==4)
+data.loc[condition_0 & condition_1 & ~condition_2 & ~condition_3 & condition_4, 'label1'] = r'$f$ Ensemble'
+data.loc[condition_0 & ~condition_1 & condition_2, 'label1'] = r'$\mathcal{Q}$'
 data.loc[condition_0 & condition_1 & condition_2 & condition_3, 'label1'] = r'$f$ Ensemble $+$ $\mathcal{Q}$'
 data['label1'] = data['label1'].astype("category")
 
@@ -52,6 +60,16 @@ def padded_moving_average(df, columns, window=20, total_len=500_001):
                 df.at[i, 'global_step'] = repeated_steps[::window]
                 df.at[i, column] = repeated_values[::window]
     return df
+
+def median_final_value(df, column):
+    values = []
+    for i in range(len(df)):
+        values.append(df.at[i, column][-1])
+    values = np.array(values)
+    return np.median(values)
+
+temp_df = padded_moving_average(runs_df_sac, ['episodic_return'], window=20, total_len=1_000_001)
+sac_median_final_value = median_final_value(temp_df, 'episodic_return')
 
 data = padded_moving_average(data, ['episodic_return'], window=20)
 
@@ -125,6 +143,8 @@ fig, axes = plt.subplots(nrows=1, ncols=2, sharey=True, figsize=(3.5,3.0))
 plt.tight_layout()
 
 # Plot on the first axis
+# ax.axhline(y=sac_average_final_value, color=plot_kwargs["palette"]["SAC"], dashes=plot_kwargs["dashes"]["SAC"], label='')
+axes[0].axhline(y=sac_median_final_value, color="grey", dashes=(3,1), lw=1.5, label='')
 g1 = sns.lineplot(data=df_long[df_long['label1'] != ''], ax=axes[0], **subplot1_kwargs)
 # g1.set_xlabel("Time step")
 # g1.set_ylabel("Cumulative Reward")
@@ -135,7 +155,8 @@ axes[0].legend()
 sns.move_legend(axes[0], "lower center", title="MPPI Ingredients", bbox_to_anchor=(0.5, 1), frameon=False, ncol=1)
 
 # Plot on the second axis
-g2 = sns.lineplot(data=df_long[df_long['label2'] != ''].copy(), ax=axes[1], **subplot2_kwargs,)
+axes[1].axhline(y=sac_median_final_value, color="grey", dashes=(3,1), lw=1.5, label='')
+g2 = sns.lineplot(data=df_long[df_long['label2'] != ''], ax=axes[1], **subplot2_kwargs,)
 # g2.set_xlabel("Time step")
 g2.set_xlabel("")
 g2.grid(True)
