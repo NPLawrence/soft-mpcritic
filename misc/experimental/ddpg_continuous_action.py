@@ -1,9 +1,15 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ddpg/#ddpg_continuous_actionpy
 import os
 import random
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional, cast
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import gymnasium as gym
 import numpy as np
@@ -19,10 +25,12 @@ from gymppi.mppi_uniform import UniformMPPI
 
 from gymppi.env import BaseEnvWrapper, ClassicMPPIWrapper, MujocoMPPIWrapper
 from gymppi.buffers import WarmstartReplayBuffer
-from torch_utils.networks import JointMLP_small, JointMLP_small_deep, JointMLP_medium_deep, JointMLP_medium, JointMLP_large, JointMLP_deep, EnsembleDynamicsModel, FlexEnsembleDynamicsModel, DistributionalDynamicsWrapper
-from torch_utils.trainer import Trainer, Trainer_ValueAligned, EnsembleTrainer
-
-from torch_utils.soap import SOAP
+from torch_utils.networks import JointMLP_small, JointMLP_medium, JointMLP_large, EnsembleDynamicsModel, DistributionalDynamicsWrapper
+from torch_utils.trainer import Trainer, EnsembleTrainer
+from misc.experimental.legacy_networks import JointMLP_small_deep, JointMLP_medium_deep, JointMLP_deep
+from misc.experimental.flex_networks import FlexEnsembleDynamicsModel
+from misc.experimental.trainer_value_aligned import Trainer_ValueAligned
+from misc.experimental.soap import SOAP
 
 @dataclass
 class Args:
@@ -63,7 +71,7 @@ class Args:
     tau: float = 0.005
     """target smoothing coefficient (default: 0.005)"""
     batch_size: int = 32
-    """the batch size of sample from the reply memory"""
+    """universal batch size used for replay sampling, Q updates, and transition/model updates"""
     exploration_noise: float = 0.1
     """the scale of exploration noise"""
     learning_starts: int = 0 # 25e3
@@ -82,9 +90,7 @@ class Args:
     env_in_mppi: bool = True
     """use the environment for MPPI rollouts"""
     mppi_control_mode: str = "default"
-    """MPPI online control mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
-    mppi_target_mode: str = "default"
-    """MPPI offline target mode: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
+    """MPPI control mode used for both online control and MPPI targets: one of {'default','mu','integrator','mean_residual','warmstart_residual'}"""
     mppi_handle_terminations: bool = False
     """make MPPI planner appropriately down weight trajectories that lead to termination"""
     mppi_prior: str = "gaussian"
@@ -115,8 +121,6 @@ class Args:
     """temperature parameter in MPPI"""
     vectorization_mode: str = 'sync'
     """vectorization mode for gymnasium mppi rollouts"""
-    transition_utd: int = 2
-    """the frequency of training the transition model"""
     pretrain: bool = False
     """the frequency of training the transition model"""
     transition_network: str = 'small'
@@ -133,10 +137,6 @@ class Args:
     """activation function for each hidden layer of each network of the ensemble,
        (e.g. [['relu'],['relu','relu']]] for num_hidden_list=[1,2])
         or 'relu' to apply to every network and layer); defaults to random choice when unset"""
-    ensemble_rollout_mode: str = "batch"
-    """ensemble rollout mode for MPPI: one of {'trajectory', 'batch'}"""
-    transition_batch_size: int = 32
-    """batch size for transition model updates"""
     use_huber_loss: bool = False
     """if True use Huber (SmoothL1) universally, else use MSE universally"""
     huber_delta: float = 1.0
@@ -299,12 +299,6 @@ def update_mppi(
     # if not args.env_in_mppi and (global_step % args.transition_frequency == 0):
     if args.mppi and not args.env_in_mppi and args.horizon > 0:
         dynamics_loss, reward_loss = transition_trainer.update(data)
-        for _ in range(args.transition_utd-1):
-            data, _, _ = rb.sample(args.batch_size)
-            dynamics_loss, reward_loss = transition_trainer.update(data)
-        # for _ in range(args.transition_utd):
-        #     data, _, _ = rb.sample(args.transition_batch_size)
-        #     dynamics_loss, reward_loss = transition_trainer.update(data)
     else:
         reward_loss = torch.tensor([0.])
         dynamics_loss = torch.tensor([0.])
@@ -410,24 +404,20 @@ def train(args):
         _MPPI_cls = MPPI if args.mppi_prior == "gaussian" else UniformMPPI
         if args.mppi_control_mode not in {"default", "mu", "integrator", "mean_residual", "warmstart_residual"}:
             raise ValueError(f"Invalid mppi_control_mode={args.mppi_control_mode}. Expected one of 'default', 'mu', 'integrator', 'mean_residual', 'warmstart_residual'.")
-        if args.ensemble_rollout_mode not in {"trajectory", "batch"}:
-            raise ValueError(
-                f"Invalid ensemble_rollout_mode={args.ensemble_rollout_mode}. Expected one of 'trajectory', 'batch'."
-            )
         cov = args.var*torch.diag(torch.ones(np.prod(envs.single_action_space.shape), dtype=torch.float32))
 
         if args.env_in_mppi:
             mppi = _MPPI_cls(env=envs.envs[0], rollout_envs=rollout_envs[0:1], gamma=args.gamma, Q=Q, mu=actor,
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
-                        lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                        lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi1 = _MPPI_cls(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                         B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
-                                         lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                                         B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
+                                         lambda_=args.lambda_, cov=cov)
                 if args.double_Q:
                     target_mppi2 = _MPPI_cls(env=envs.envs[0], rollout_envs=target_rollout_envs, gamma=args.gamma, Q=qf2_target, mu=target_actor,
-                                             B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
-                                             lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                                             B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
+                                             lambda_=args.lambda_, cov=cov)
         else:
             transition_optimizer = Adam if args.model_optimizer == "adam" else SOAP
             if transition_ensemble_size > 1:
@@ -550,15 +540,15 @@ def train(args):
 
             mppi = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=Q, mu=actor,
                         B=1, T=args.horizon, K=args.num_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
-                        lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                    lambda_=args.lambda_, cov=cov)
             if args.mppi_targets:
                 target_mppi1 = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf1_target, mu=target_actor,
-                                B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
-                                lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                                B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
+                        lambda_=args.lambda_, cov=cov)
                 if args.double_Q:
                         target_mppi2 = _MPPI_cls(env=envs.envs[0], transition_model=transition_model, gamma=args.gamma, Q=qf2_target, mu=target_actor,
-                                                 B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_target_mode, handle_terminations=args.mppi_handle_terminations,
-                                                 lambda_=args.lambda_, cov=cov, ensemble_rollout_mode=args.ensemble_rollout_mode)
+                                                 B=args.batch_size, T=target_horizon, K=args.num_target_rollouts, control_mode=args.mppi_control_mode, handle_terminations=args.mppi_handle_terminations,
+                                 lambda_=args.lambda_, cov=cov)
                 else:
                     target_mppi2 = None
             else:
@@ -621,7 +611,7 @@ def train(args):
                 if args.mppi:
                     mppi.reset()
         rb.add(obs, real_next_obs, actions, Us, rewards, terminations, infos)
-        if (global_step > 0) and (global_step % 100 == 0):
+        if (args.mppi and not args.env_in_mppi and transition_trainer is not None and global_step > 0 and global_step % 100 == 0):
             deltas = rb.next_observations[:global_step] - rb.observations[:global_step]
             transition_trainer.scaler.fit(torch.from_numpy(deltas).to(torch.float32))
 
@@ -629,7 +619,7 @@ def train(args):
         obs = next_obs
 
         if global_step == args.learning_starts and args.mppi and not args.env_in_mppi and args.pretrain and args.horizon > 0:
-            for _ in range(int(args.learning_starts*args.transition_utd)):
+            for _ in range(int(args.learning_starts)):
                 data, _, _ = rb.sample(args.batch_size)
                 dynamics_loss, reward_loss = transition_trainer.update(data)
 
@@ -774,7 +764,8 @@ def train(args):
         if args.num_rollouts != args.num_target_rollouts:
             [env.close() for env in target_rollout_envs]
     writer.close()
-    wandb.finish()
+    if args.track:
+        wandb.finish()
 
 if __name__ == "__main__":
     args = tyro.cli(Args)

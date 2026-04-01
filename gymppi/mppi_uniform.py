@@ -1,3 +1,14 @@
+"""Uniform-prior MPPI planner.
+
+This module implements MPPI with a uniform action prior and a Gaussian
+controlled distribution. Importance-sampling correction is applied as
+$\\lambda \\log(q/p)$ under uniform prior support constraints.
+
+References:
+- https://doi.org/10.1109/ICRA.2017.7989202
+- https://github.com/UM-ARM-Lab/pytorch_mppi
+"""
+
 import numpy as np
 import torch
 from torch.distributions import MultivariateNormal
@@ -15,7 +26,13 @@ from torch.distributions import MultivariateNormal
 
 
 class UniformMPPI():
-    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, control_mode="default", ensemble_rollout_mode="trajectory", handle_terminations=True):
+    """Model Predictive Path Integral (MPPI) controller with uniform prior.
+
+    Args mirror `gymppi.mppi.MPPI`, with the key distinction that the prior
+    distribution over actions is uniform inside action bounds while sampling is
+    still performed from a Gaussian controlled distribution.
+    """
+    def __init__(self, env, rollout_envs=None, gamma=0.99, transition_model=None, Q=None, mu=None, B=1, T=10, K=100, mean=None, cov=None, lambda_=1.0, u_init=None, control_mode="default", handle_terminations=True):
         self.env = env
         self.rollout_envs = rollout_envs
         self.env_dtype = self.env.observation_space.dtype
@@ -32,15 +49,10 @@ class UniformMPPI():
         self.mu = mu # controller (used only when control_mode == "mu")
 
         self.control_mode = control_mode
-        self.ensemble_rollout_mode = ensemble_rollout_mode
         self.handle_terminations = handle_terminations
 
-        if self.control_mode not in {"default", "mu", "integrator", "traj_integrator", "mean_residual", "warmstart_residual"}:
-            raise ValueError(f"Invalid control_mode={self.control_mode}. Expected one of 'default', 'mu', 'integrator', 'traj_integrator', 'mean_residual', 'warmstart_residual'.")
-        if self.ensemble_rollout_mode not in {"trajectory", "batch"}:
-            raise ValueError(
-                f"Invalid ensemble_rollout_mode={self.ensemble_rollout_mode}. Expected one of 'trajectory', 'batch'."
-            )
+        if self.control_mode not in {"default", "mu", "mean_residual"}:
+            raise ValueError(f"Invalid control_mode={self.control_mode}. Expected one of 'default', 'mu', 'mean_residual'.")
 
         self.B = B # batch size
         self.K = K # number of trajectory samples
@@ -74,19 +86,17 @@ class UniformMPPI():
         self.info = None
 
         # sampled results from last command
-        self.last_U = self.u_init * torch.ones_like(self.U) # integral trajectory w.r.t. "environment time" where each element is u_t = u_t-1 + \delta_t (index i corresponds to t=i-1)
-        self.last_action = self.u_init * torch.ones_like(self.U[:,:,0]) # initial action for integral action w.r.t. "horizon time" where each subsequent element is u_k = u_k-1 + \delta_k (index i corresponds to k=i-1)
+        self.last_action = self.u_init * torch.ones_like(self.U[:,:,0])
         self.rollout_observation = None
         self.rollout_observations = None
         self.rollout_actions = None
         self.rollout_valids = None
         self.value = torch.zeros(self.B, 1)
-        self.rollout_model_indices = None
 
     @torch.no_grad()
     def make_step(self, observation, mode="action"):
         """return action for given observation"""
-        obs_tensor = torch.tensor(observation, dtype=self.dtype)
+        obs_tensor = torch.as_tensor(observation, dtype=self.dtype)
         if obs_tensor.ndim == 2:
             self.observation = obs_tensor.view(self.B, self.ns)
         elif obs_tensor.ndim == 3 and obs_tensor.shape[1] == 1:
@@ -101,9 +111,6 @@ class UniformMPPI():
         if self.control_mode == "mean_residual":
             self.mean_U = torch.mean(self.U, dim=2, keepdim=True)  # [B, 1, 1, nu]
             self.delta_U = self.U - self.mean_U
-        elif self.control_mode == "warmstart_residual":
-            self.traj_baseline_U = self.U.clone()  # [B, 1, T+1, nu]
-            self.delta_U = torch.zeros_like(self.U)
         else:
             self.delta_U = self.U
 
@@ -112,16 +119,6 @@ class UniformMPPI():
 
         if self.rollout_envs:
             self._sync_envs()
-
-        if self.transition_model is not None and hasattr(self.transition_model, "ensemble_size") and self.ensemble_rollout_mode == "trajectory":
-            if self.rollout_model_indices is None:
-                self.rollout_model_indices = torch.randint(
-                    self.transition_model.ensemble_size,
-                    (self.B * self.K,),
-                    dtype=torch.long,
-                )
-        else:
-            self.rollout_model_indices = None
 
         # --- Fully batched path: vectorise over B × K ---
         rollout_cost = self._compute_rollout_costs_batched()  # [B, K]
@@ -187,11 +184,6 @@ class UniformMPPI():
             if self.mu is None:
                 raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
             action = self.mu(self.observation).view(self.B, 1, self.nu) + self.U[:, 0, [0]]
-        elif self.control_mode == "integrator":
-            action = self.last_action + self.U[:, 0, [0]]
-        elif self.control_mode == "traj_integrator":
-            self.last_U = self.last_U + self.U
-            action = self.last_U[:, 0, [0]]
         else:
             action = self.U[:, 0, [0]]  # first action in sequence across batch: [B, 1, nu]
 
@@ -264,24 +256,8 @@ class UniformMPPI():
                 if self.mu is None:
                     raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
                 action = self.mu(observation) + residual
-            elif self.control_mode == "integrator":
-                action = action + residual
-            elif self.control_mode == "traj_integrator":
-                last_u_t = (
-                    self.last_U[:, 0, t]
-                    .unsqueeze(1).expand(B, K, nu)
-                    .reshape(B * K, nu)
-                )
-                action = last_u_t + residual
             elif self.control_mode == "mean_residual":
                 action = mean_action + residual
-            elif self.control_mode == "warmstart_residual":
-                baseline_t = (
-                    self.traj_baseline_U[:, 0, t]
-                    .unsqueeze(1).expand(B, K, nu)
-                    .reshape(B * K, nu)
-                )
-                action = baseline_t + residual
             else:
                 action = residual
 
@@ -305,24 +281,8 @@ class UniformMPPI():
                 if self.mu is None:
                     raise ValueError("control_mode='mu' requires a non-None mu policy/controller.")
                 action = self.mu(observation) + residual
-            elif self.control_mode == "integrator":
-                action = action + residual
-            elif self.control_mode == "traj_integrator":
-                last_u_T = (
-                    self.last_U[:, 0, T]
-                    .unsqueeze(1).expand(B, K, nu)
-                    .reshape(B * K, nu)
-                )
-                action = last_u_T + residual
             elif self.control_mode == "mean_residual":
                 action = mean_action + residual
-            elif self.control_mode == "warmstart_residual":
-                baseline_T = (
-                    self.traj_baseline_U[:, 0, T]
-                    .unsqueeze(1).expand(B, K, nu)
-                    .reshape(B * K, nu)
-                )
-                action = baseline_T + residual
             else:
                 action = residual
 
@@ -353,7 +313,7 @@ class UniformMPPI():
     def _get_perturbed_action_batched(self, t):
         """Return residual [B*K, nu]."""
         B, K, nu = self.B, self.K, self.nu
-        if self.control_mode in {"mean_residual", "warmstart_residual"}:
+        if self.control_mode == "mean_residual":
             base = self.delta_U[:, 0, t]  # [B, nu]
         else:
             base = self.U[:, 0, t]        # [B, nu]
@@ -377,14 +337,7 @@ class UniformMPPI():
     def _step_rollout(self, observation, action):
         """step the trajectory forward with the appropriate dynamics and cost models or environments"""
         if self.transition_model is not None:
-            if self.rollout_model_indices is not None:
-                next_observations, rewards, terminations = self.transition_model(
-                    observation,
-                    action,
-                    model_indices=self.rollout_model_indices,
-                )
-            else:
-                next_observations, rewards, terminations = self.transition_model(observation, action)
+            next_observations, rewards, terminations = self.transition_model(observation, action)
             return next_observations.to(self.dtype), -rewards.flatten().to(self.dtype), terminations.flatten()
         else:
             if self.rollout_envs is None:
@@ -422,7 +375,6 @@ class UniformMPPI():
                 for _ in range(self.T+1 - init_len):
                     U_init = torch.cat([U_init, u_next], dim=1)
             self.U = U_init.view((self.B, 1, self.T+1, self.nu))
-        self.last_U = self.u_init * torch.ones_like(self.U)
         self.last_action = self.u_init * torch.ones_like(self.U[:,:,0])
         self.noise = torch.zeros(self.B, self.K, self.T+1, self.nu, dtype=self.dtype)
         self.value = torch.zeros(self.B, 1)
@@ -432,5 +384,4 @@ class UniformMPPI():
         self.rollout_actions = None
         self.rollout_valids = None
         self.rollout_terminateds = None
-        self.rollout_model_indices = None
 

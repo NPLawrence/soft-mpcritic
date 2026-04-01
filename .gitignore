@@ -189,3 +189,5 @@ graphic/
 data/
 *.png
 *.pdf
+!misc/softmpcritic_concept.png
+!misc/softmpcritic_concept.pdf

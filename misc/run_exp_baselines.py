@@ -6,33 +6,21 @@ from sac import Args as SACArgs
 from sac import train as train_sac
 
 
-# ENV_TOTAL_TIMESTEPS = {
-#     "InvertedDoublePendulum-v5": 100_000,
-#     "Hopper-v5": 1_000_000,
-#     "Walker2d-v5": 1_000_000,
-#     "Ant-v5": 2_000_000,
-# }
-
 ENV_TOTAL_TIMESTEPS = {
+    "InvertedDoublePendulum-v5": 100_000,
+    "Hopper-v5": 1_000_000,
+    "Walker2d-v5": 1_000_000,
     "Ant-v5": 2_000_000,
 }
 
-SEEDS = range(3)
-
-# ALGORITHMS = {
-#     "ddpg": {
-#         "args_cls": DDPGArgs,
-#         "train_fn": train_ddpg,
-#         "wandb_project_name": "ddpg_baseline",
-#     },
-#     "sac": {
-#         "args_cls": SACArgs,
-#         "train_fn": train_sac,
-#         "wandb_project_name": "sac_baseline",
-#     },
-# }
+SEEDS = range(10)
 
 ALGORITHMS = {
+    "ddpg": {
+        "args_cls": DDPGArgs,
+        "train_fn": train_ddpg,
+        "wandb_project_name": "ddpg_baseline",
+    },
     "sac": {
         "args_cls": SACArgs,
         "train_fn": train_sac,
@@ -54,7 +42,7 @@ def build_args(args_cls, env_id: str, total_timesteps: int, seed: int, wandb_pro
 
 
 if __name__ == "__main__":
-    wandb_entity = "mpcritic-dpc"
+    wandb_entity = ""
     for algorithm_name, algorithm_config in ALGORITHMS.items():
         args_cls = algorithm_config["args_cls"]
         train_fn: Callable = algorithm_config["train_fn"]

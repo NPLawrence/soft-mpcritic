@@ -1,6 +1,12 @@
 # soft-mpcritic
 
-This is the codebase for our CDC paper `Soft MPCritic: Amortized model predictive value iteration`
+This is the codebase for our paper `Soft MPCritic: Amortized model predictive value iteration`
+
+## Concept Diagram
+
+![Soft MPCritic concept diagram](misc/softmpcritic_concept.png)
+
+*High-level overview of the Soft MPCritic architecture and training signal flow.*
 
 ## Requirements
 
@@ -22,21 +28,20 @@ Run commands through `uv run` so they use the project environment.
 Inspect available flags:
 
 ```bash
-uv run python ddpg_continuous_action_v2.py --help
+uv run python soft_mpcritic.py --help
 uv run python sac.py --help
 ```
 
 Example single runs:
 
 ```bash
-uv run python ddpg_continuous_action_v2.py \
+uv run python soft_mpcritic.py \
 	--env-id Hopper-v5 \
 	--track False \
 	--total-timesteps 500000 \
 	--horizon 4 \
 	--target-horizon 4 \
-	--num-rollouts 200 \
-	--num-target-rollouts 20
+	--num-rollouts 200
 
 uv run python sac.py \
 	--env-id Hopper-v5 \
@@ -46,16 +51,11 @@ uv run python sac.py \
 
 ## Experiment Scripts
 
-The repository includes convenience launchers for sweeps and named experiment sets:
+The repository includes a launcher for sweeps and named experiment sets:
 
 - `run_exp.py`
-- `run_exp_walker.py`
-- `run_exp_baselines.py`
-- `run_exp_npl.py`
-- `run_exp_soap.py`
-- `run_exp_tb.py`
 
-These scripts set arguments in code and execute repeated runs over seeds/hyperparameters.
+This script sets arguments in code and executes repeated runs over seeds/hyperparameters.
 
 ## Outputs
 
@@ -72,12 +72,6 @@ These scripts set arguments in code and execute repeated runs over seeds/hyperpa
 - The repository uses `uv.lock` for pinned dependencies.
 - Most scripts expose a `seed` argument.
 - MuJoCo/Gymnasium versions can affect benchmark numbers; keep versions consistent with `pyproject.toml`.
-
-## Development Notes
-
-- Install dependencies with `uv sync`.
-- Run a quick import/training CLI check before sharing results.
-- Keep large local artifacts (`runs/`, `wandb/`, generated figures) out of commits.
 
 ## License
 

@@ -123,69 +123,6 @@ class Trainer():
         return dynamics_loss, reward_loss
     
 
-class Trainer_ValueAligned():
-    def __init__(
-        self,
-        model,
-        actor,
-        critic,
-        gamma=0.99,
-        T=3,
-        optimizer_class: Any = Adam,
-        lr=3e-4,
-        model_loss=None,
-        temp_behavior="bce_exp",
-        huber_delta=1.0,
-        scaler='null',
-    ):
-        self.transition_model = model
-        self.mu = actor
-        self.Q = critic
-        self.model_loss = nn.SmoothL1Loss(beta=huber_delta) if model_loss is None else model_loss
-        self.temp_model_loss = temp_behavior
-        self.model_optimizer = optimizer_class(list(self.transition_model.parameters()), lr=lr)
-        self.gamma = gamma
-        self.T = T
-        self.scaler = scaler_map[scaler](model.nx)
-
-    def update(self, data):
-        device = next(self.transition_model.parameters()).device
-        observations = data.observations.to(device=device, dtype=torch.float32)
-        next_observations = data.next_observations.to(device=device, dtype=torch.float32)
-        actions = data.actions.to(device=device, dtype=torch.float32)
-        if hasattr(self.transition_model, "update_input_stats"):
-            self.transition_model.update_input_stats(observations, actions)
-        # dones = data.dones.to(device=device, dtype=torch.float32)
-
-        pred_next_observations, _, _ = self.transition_model(observations, actions)
-        model_value = self.Q(pred_next_observations, self.mu(pred_next_observations))
-        target_value = self.Q(next_observations, self.mu(next_observations)).detach()
-
-        if self.temp_model_loss == "bce_exp":
-            target_q_prob = torch.exp(-target_value)
-            model_q_prob = torch.exp(-model_value)
-            dynamics_loss = torch.nn.functional.binary_cross_entropy(model_q_prob, target_q_prob)
-        elif self.temp_model_loss == "mse":
-            target_q_prob = target_value
-            model_q_prob = model_value
-            dynamics_loss = torch.nn.functional.mse_loss(model_q_prob, target_q_prob)
-        elif self.temp_model_loss == "vaml":
-            target_q_prob = target_value
-            model_q_prob = model_value
-            dynamics_loss = torch.nn.functional.mse_loss(model_q_prob, target_q_prob)
-        else:
-            raise ValueError(f"Unknown temp_model_loss={self.temp_model_loss}. Expected one of 'bce_exp', 'mse', 'vaml'.")
-
-        loss = dynamics_loss
-
-        # Optimize the model
-        self.model_optimizer.zero_grad()
-        loss.backward()
-        self.model_optimizer.step()
-
-        return dynamics_loss, torch.tensor(0.0)
-
-
 class EnsembleTrainer():
     def __init__(
         self,
@@ -362,9 +299,8 @@ class MPPITrainer:
     def _update_f(self):
         args = self.args
         if args.mppi and not args.env_in_mppi and args.horizon > 0:
-            for _ in range(args.transition_utd):
-                data, _, _ = self._sample()
-                dynamics_loss, reward_loss = self.transition_trainer.update(data)
+            data, _, _ = self._sample()
+            dynamics_loss, reward_loss = self.transition_trainer.update(data)
         else:
             dynamics_loss = torch.tensor([0.])
             reward_loss = torch.tensor([0.])
@@ -385,19 +321,6 @@ class MPPITrainer:
                 else:
                     dynamics_loss, reward_loss = self.last_dynamics_loss, self.last_reward_loss
                 qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = self._update_Q(global_step)
-            elif self.training_pattern == 'episodic_model_first':
-                if (episode_ended or is_first_update):
-                    for _ in range(num_updates):
-                        dynamics_loss, reward_loss = self._update_f()
-                    for k in range(num_updates):
-                        effective_global_step = self.last_done_global_step + k
-                        qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = self._update_Q(effective_global_step)
-                else:
-                    qf1_a_values, qf1_loss, qf_loss, qf2_a_values, qf2_loss = (
-                        self.last_qf1_a_values, self.last_qf1_loss, self.last_qf_loss,
-                        self.last_qf2_a_values, self.last_qf2_loss
-                    )
-                    dynamics_loss, reward_loss = self.last_dynamics_loss, self.last_reward_loss
             elif self.training_pattern == 'episodic':
                 if (episode_ended or is_first_update):
                     for k in range(num_updates):

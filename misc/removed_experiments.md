@@ -1,0 +1,22 @@
+# Tried and Removed
+
+- SOAP optimizer path in active training code
+- `value_aligned_model_loss`
+- `Trainer_ValueAligned`
+- Deep transition network variants:
+  - `small_deep`
+  - `medium_deep`
+  - `deep`
+- Flex transition model variants:
+  - `flex`
+  - `FlexEnsembleDynamicsModel`
+- MPPI control modes:
+  - `integrator`
+  - `traj_integrator`
+  - `warmstart_residual`
+- Separate `mppi_target_mode`
+- `ensemble_rollout_mode`
+- Ensemble `trajectory` rollout mode
+- `transition_utd`
+- `transition_batch_size`
+- `episodic_model_first`
