@@ -3,6 +3,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+WINDOW = 500
+TOTAL_LEN = 50_000
+FINAL_LEN = 50_000
+
 project = 'sac_baseline'
 runs_df_sac = pd.read_pickle(f"data/{project}_all_data.pkl")
 runs_df_sac = runs_df_sac[(runs_df_sac['env_id']=='InvertedDoublePendulum-v5')]
@@ -22,43 +26,94 @@ data_target_h4 = data_target_r20[(data_target_r20['target_horizon']==4)]
 data = pd.concat([data_target_h4], ignore_index=True)
 # data = pd.concat([data_target_h4.sample(n=20)], ignore_index=True)
 
-def padded_moving_average(df, columns, window=20, total_len=50_001):
-    for column in columns:
-        for i in range(len(df)):
-            df.at[i, column] = pd.Series(df[column].iloc[i]).rolling(window).mean().dropna().to_numpy()
-            if df['global_step'] is not None:
-                df.at[i, 'global_step'] = df.at[i, 'global_step'][window-1:]
+def pad_arrays(df, column, total_len=500_000,):
+    for i in df.index:
+        if df.at[i, 'global_step'] is not None:
+            diffs = np.diff(df.at[i, 'global_step'])
+            repeated_values = np.repeat(df.at[i, column][:-1], diffs)
+            pad_width = total_len - len(repeated_values)
+            repeated_values = np.pad(repeated_values, (0, pad_width), mode='edge')
 
-                diffs = np.diff(df.at[i, 'global_step'])
-                repeated_values = np.repeat(df.at[i, column][:-1], diffs)
-                pad_width = total_len - len(repeated_values)
-                repeated_values = np.pad(repeated_values, (0, pad_width), mode='edge')
+            repeated_steps  = np.arange(total_len)
 
-                repeated_steps  = np.arange(total_len)
+            df.at[i, 'global_step'] = repeated_steps
+            df.at[i, column] = repeated_values
 
-                df.at[i, 'global_step'] = repeated_steps[::window]
-                df.at[i, column] = repeated_values[::window]
     return df
 
-def median_final_value(df, column):
-    values = []
-    for i in range(len(df)):
-        values.append(df.at[i, column][-1])
-    values = np.array(values)
-    return np.median(values)
+def median_low_high(df, column):
+    run_arrays = []
+    for i in df.index:
+        run_arrays.append(df.at[i, column][None,:])
 
-temp_df = padded_moving_average(runs_df_sac, ['episodic_return'], window=20, total_len=1_000_001)
-sac_median_final_value = median_final_value(temp_df, 'episodic_return')
+    run_arrays = np.concatenate(run_arrays)
+    run_medians = np.median(run_arrays, axis=0)
+    run_lows = np.percentile(run_arrays, q=20, axis=0, interpolation='midpoint')
+    run_highs = np.percentile(run_arrays, q=80, axis=0, interpolation='midpoint')
 
-data = padded_moving_average(data, ['episodic_return'])
+    return run_medians, run_lows, run_highs
 
-df_long = data.explode(['episodic_return', 'global_step'], ignore_index=True)
-df_long.loc[df_long['mppi_target_warmstart'] == True, 'mppi_target_iterations'] = '1 (Warm)'
-df_long.loc[df_long['mppi_target_warmstart'] == False, 'mppi_target_warmstart'] = 'Cold'
-df_long.loc[df_long['mppi_target_warmstart'] == True, 'mppi_target_warmstart'] = 'Warm'
-df_long.loc[~pd.isna(df_long['transition_ensemble_size']), 'transition_ensemble_size'] = 'Single'
-df_long.loc[pd.isna(df_long['transition_ensemble_size']), 'transition_ensemble_size'] = 'Ensemble'
-hue = 'mppi_target_iterations'
+def moving_average(array):
+    ma = pd.Series(array).rolling(WINDOW).mean().dropna().to_numpy()
+    return ma
+
+def trim(array):
+    return array[:FINAL_LEN][::WINDOW]
+
+def ma_global_step():
+    return np.arange(WINDOW, FINAL_LEN+1, WINDOW)
+
+def process_data(data, y_column, label_columns, labels, total_len=500_000):
+    """
+    for label, col in zip(label, label_column):
+        temp_data = data[data[label_column] == label]
+    """
+    for label, col in zip(labels, label_columns):
+        data = data[data[col] == label]
+    data = pad_arrays(data, y_column, total_len)
+    med, low, high = median_low_high(data, y_column)
+    med, low, high = map(moving_average, [med, low, high])
+    med, low, high = map(trim, [med, low, high])
+    return pd.DataFrame({
+        'global_step' : ma_global_step(),
+        'median': med,
+        'low': low,
+        'high': high,
+        **{col: label for label, col in zip(labels, label_columns)}
+    })
+
+data.loc[data['mppi_target_warmstart'] == True, 'mppi_target_iterations'] = '1 (Warm)'
+data.loc[data['mppi_target_warmstart'] == False, 'mppi_target_warmstart'] = 'Cold'
+data.loc[data['mppi_target_warmstart'] == True, 'mppi_target_warmstart'] = 'Warm'
+data.loc[~pd.isna(data['transition_ensemble_size']), 'transition_ensemble_size'] = 'Single'
+data.loc[pd.isna(data['transition_ensemble_size']), 'transition_ensemble_size'] = 'Ensemble'
+
+labels1 = ['1 (Warm)', 1, 5]
+labels2 = ['Ensemble', 'Single']
+
+dfs = {
+    label1 : {
+        label2 : None for label2 in labels2
+    } for label1 in labels1
+}
+
+for label1 in labels1:
+    for label2 in labels2:
+        dfs[label1][label2] = process_data(
+            data,
+            'episodic_return',
+            ['mppi_target_iterations', 'transition_ensemble_size'],
+            [label1, label2]
+        )
+        dfs[label1][label2]['mppi_target_warmstart'] = 'Warm' if label1 == '1 (Warm)' else 'Cold'
+
+plot_df = pd.DataFrame(columns = dfs[labels1[0]][labels2[0]].columns)
+for label1 in labels1:
+    for label2 in labels2:
+        plot_df = pd.concat([plot_df, dfs[label1][label2]], ignore_index=True)
+
+temp_df = process_data(runs_df_sac, 'episodic_return', ['label'], ["SAC"])
+sac_median_final_value = temp_df['median'].iloc[-1]
 
 sns.set(palette='husl', style='ticks')
 
@@ -83,31 +138,39 @@ params = {
         "font.serif" : ["Computer Modern Serif"]}
 plt.rcParams.update(params)
 
-def min_max_error(x):
-    return x.min(), x.max()
-
-lineplot_kwargs = {
+plot_kwargs = {
     "x" : "global_step",
-    "y" : "episodic_return",
-    "hue" : hue,
-    "estimator" : np.median,
-    "errorbar" : min_max_error,
-    "style" : hue,
+    "y" : "median",
+    "hue" : 'mppi_target_iterations',
+    "style" : 'mppi_target_iterations',
     "alpha" : 1.0
 }
 
-g = sns.FacetGrid(df_long, col="mppi_target_warmstart", row="transition_ensemble_size", margin_titles=True, despine=False, legend_out=False, height=1.75, aspect=1)
+g = sns.FacetGrid(plot_df, col="mppi_target_warmstart", row="transition_ensemble_size", margin_titles=True, despine=False, legend_out=False, height=1.75, aspect=1)
 for ax in g.axes.flatten():
     ax.axhline(y=sac_median_final_value, color="grey", dashes=(3,1), lw=1.5, label='')
-g.map_dataframe(sns.lineplot, **lineplot_kwargs)
+g.map_dataframe(sns.lineplot, **plot_kwargs)
 # g.set_axis_labels("Time step", "Reward")
 for ax in g.axes.flat:
     ax.grid(True)
 g.set_axis_labels("", "")
-g.set_titles(col_template="{col_name} start", row_template=r"{row_name} $f$", size=SMALL_SIZE)
+g.set_titles(col_template="{col_name}-start", row_template=r"{row_name} $f$", size=SMALL_SIZE)
 g.tight_layout() # call before making legend outside
 g.add_legend()
 sns.move_legend(g, "lower center", title="MPPI target iterations", bbox_to_anchor=(0.5, 0.95), frameon=False, ncol=3)
+
+for label1 in labels1:
+    for label2 in labels2:
+        temp_df = dfs[label1][label2]
+        if label1 == '1 (Warm)':
+            ax = g.axes[0][0] if label2 == 'Ensemble' else g.axes[1][0]
+        else:
+            ax = g.axes[0][1] if label2 == 'Ensemble' else g.axes[1][1]
+        # for label in plot1_df['label'].unique():
+            # color = subplot1_kwargs["palette"][label]
+            # temp_df = plot1_df[plot1_df['label']==label]
+            # axes[0].fill_between(x=temp_df['global_step'], y1=temp_df['low'], y2=temp_df['high'], color=color, alpha=0.2)
+        ax.fill_between(x=temp_df['global_step'], y1=temp_df['low'], y2=temp_df['high'], alpha=0.2)
 
 # fine-tuning x-ticks
 xticks=np.arange(0, 5*10e3+1, step=10e3)

@@ -3,12 +3,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-project = 'sac_baseline'
-runs_df_sac = pd.read_pickle(f"data/{project}_all_data.pkl")
-runs_df_sac = runs_df_sac[(runs_df_sac['env_id']=='Hopper-v5')]
-runs_df_sac = pd.concat([runs_df_sac], ignore_index=True)
-runs_df_sac['label'] = "SAC"
-runs_df_sac['label'] = runs_df_sac['label'].astype("category")
+WINDOW = 5000
+TOTAL_LEN = 500_000
+FINAL_LEN = 500_000
 
 project = 'dual_mpcritic_ddpg_new_value_with_discount'
 
@@ -19,7 +16,6 @@ data_env = runs_df[(runs_df['env_id']=='Hopper-v5')]
 data_target_r20 = data_env[(data_env['num_target_rollouts']==20) & (data_env['num_rollouts']==200)]
 data_target_h4 = data_target_r20[(data_target_r20['target_horizon']==4)]
 data = pd.concat([data_target_h4], ignore_index=True)
-# data = pd.concat([data_target_h4.sample(n=10)], ignore_index=True)
 
 data['label1'] = ""
 # subplot1: MPPI Parameterization (model & Q in MPPI) trends
@@ -28,9 +24,15 @@ condition_1 = (pd.isna(data['transition_ensemble_size']))
 condition_2 = (data['Q_in_mppi'])
 condition_3 = (data['mppi_targets'])
 condition_4 = (data['horizon']==4)
-data.loc[condition_0 & condition_1 & ~condition_2 & ~condition_3 & condition_4, 'label1'] = r'$f$ Ensemble'
-data.loc[condition_0 & ~condition_1 & condition_2, 'label1'] = r'$\mathcal{Q}$'
-data.loc[condition_0 & condition_1 & condition_2 & condition_3, 'label1'] = r'$f$ Ensemble $+$ $\mathcal{Q}$'
+
+labels1 = [
+    r'$\mathrm{no}\ \mathcal{Q}\ /\ f\ \mathrm{Ensemble}$',
+    r'$\mathcal{Q}\ /\ \mathrm{no}\ f\ \mathrm{Ensemble}$',
+    r'$f\ \mathrm{Ensemble} + \mathcal{Q}$'
+]
+data.loc[condition_0 & condition_1 & ~condition_2 & ~condition_3 & condition_4, 'label1'] = labels1[0]
+data.loc[condition_0 & ~condition_1 & condition_2, 'label1'] = labels1[1]
+data.loc[condition_0 & condition_1 & condition_2 & condition_3, 'label1'] = labels1[2]
 data['label1'] = data['label1'].astype("category")
 
 data['label2'] = ""
@@ -38,45 +40,74 @@ data['label2'] = ""
 condition_0 = (pd.isna(data['transition_ensemble_size'])) & (data['Q_in_mppi'])
 condition_1 = (data['mppi_targets'])
 condition_2 = (data['mppi_online'])
-data.loc[condition_0 & condition_1 & ~condition_2, 'label2'] = 'Targets'
-data.loc[condition_0 & ~condition_1 & condition_2, 'label2'] = 'Control'
-data.loc[condition_0 & condition_1 & condition_2, 'label2'] = 'Targets $+$ Control'
+
+labels2 = ['Targets', 'Control', 'Targets $+$ Control']
+data.loc[condition_0 & condition_1 & ~condition_2, 'label2'] = labels2[0]
+data.loc[condition_0 & ~condition_1 & condition_2, 'label2'] = labels2[1]
+data.loc[condition_0 & condition_1 & condition_2, 'label2'] = labels2[2]
 data['label2'] = data['label2'].astype("category")
 
-def padded_moving_average(df, columns, window=20, total_len=500_001):
-    for column in columns:
-        for i in range(len(df)):
-            df.at[i, column] = pd.Series(df[column].iloc[i]).rolling(window).mean().dropna().to_numpy()
-            if df['global_step'] is not None:
-                df.at[i, 'global_step'] = df.at[i, 'global_step'][window-1:]
+def pad_arrays(df, column, total_len=500_000,):
+    for i in df.index:
+        if df.at[i, 'global_step'] is not None:
+            diffs = np.diff(df.at[i, 'global_step'])
+            repeated_values = np.repeat(df.at[i, column][:-1], diffs)
+            pad_width = total_len - len(repeated_values)
+            repeated_values = np.pad(repeated_values, (0, pad_width), mode='edge')
 
-                diffs = np.diff(df.at[i, 'global_step'])
-                repeated_values = np.repeat(df.at[i, column][:-1], diffs)
-                pad_width = total_len - len(repeated_values)
-                repeated_values = np.pad(repeated_values, (0, pad_width), mode='edge')
+            repeated_steps  = np.arange(total_len)
 
-                repeated_steps  = np.arange(total_len)
+            df.at[i, 'global_step'] = repeated_steps
+            df.at[i, column] = repeated_values
 
-                df.at[i, 'global_step'] = repeated_steps[::window]
-                df.at[i, column] = repeated_values[::window]
     return df
 
-def median_final_value(df, column):
-    values = []
-    for i in range(len(df)):
-        values.append(df.at[i, column][-1])
-    values = np.array(values)
-    return np.median(values)
+def median_low_high(df, column):
+    run_arrays = []
+    for i in df.index:
+        run_arrays.append(df.at[i, column][None,:])
 
-temp_df = padded_moving_average(runs_df_sac, ['episodic_return'], window=20, total_len=1_000_001)
-sac_median_final_value = median_final_value(temp_df, 'episodic_return')
+    run_arrays = np.concatenate(run_arrays)
+    run_medians = np.median(run_arrays, axis=0)
+    run_lows = np.percentile(run_arrays, q=20, axis=0, interpolation='midpoint')
+    run_highs = np.percentile(run_arrays, q=80, axis=0, interpolation='midpoint')
 
-data = padded_moving_average(data, ['episodic_return'], window=20)
+    return run_medians, run_lows, run_highs
 
-df_long = data.explode(['episodic_return', 'global_step'], ignore_index=True)
+def moving_average(array):
+    ma = pd.Series(array).rolling(WINDOW).mean().dropna().to_numpy()
+    return ma
 
-hue1 = 'label1'
-hue2 = 'label2'
+def trim(array):
+    return array[:FINAL_LEN][::WINDOW]
+
+def ma_global_step():
+    return np.arange(WINDOW, FINAL_LEN+1, WINDOW)
+
+def process_data(data, y_column, label_column, label, total_len=500_000):
+    data = data[data[label_column] == label]
+    data = pad_arrays(data, y_column, total_len)
+    med, low, high = median_low_high(data, y_column)
+    med, low, high = map(moving_average, [med, low, high])
+    med, low, high = map(trim, [med, low, high])
+    return pd.DataFrame({
+        'global_step' : ma_global_step(),
+        'median': med,
+        'low': low,
+        'high': high,
+        'label': label
+    })
+
+no_Q_df = process_data(data, 'episodic_return', 'label1', labels1[0])
+no_f_ens_df = process_data(data, 'episodic_return', 'label1', labels1[1])
+Q_and_ens_df = process_data(data, 'episodic_return', 'label1', labels1[2])
+
+target_df = process_data(data, 'episodic_return', 'label2', labels2[0])
+control_df = process_data(data, 'episodic_return', 'label2', labels2[1])
+target_and_control_df = process_data(data, 'episodic_return', 'label2', labels2[2])
+
+plot1_df = pd.concat([no_Q_df, no_f_ens_df, Q_and_ens_df], ignore_index=True)
+plot2_df = pd.concat([target_df, control_df, target_and_control_df], ignore_index=True)
 
 sns.set(palette='husl', style='ticks')
 
@@ -101,76 +132,72 @@ params = {
         "font.serif" : ["Computer Modern Serif"]}
 plt.rcParams.update(params)
 
-def min_max_error(x):
-    return x.min(), x.max()
-
-lineplot_kwargs = {
-    "x" : "global_step",
-    "y" : "episodic_return",
-    "estimator" : np.median,
-    "errorbar" : min_max_error,
-    "alpha" : 1.0
+# labels1 = [r'no $\mathcal{Q}$ / $f$ Ensemble', r'$\mathcal{Q}$ \ no $f$ Ensemble', r'$f$ Ensemble $+$ $\mathcal{Q}$']
+subplot1_kwargs = {
+    "hue" : 'label',
+    "style" : 'label',
+    # "dashes": [(4, 1), (2, 1), (1,1)]
+    "palette": {labels1[0]: sns.color_palette()[0],
+                labels1[1]: sns.color_palette()[1],
+                labels1[2]: sns.color_palette()[4]},
+    "dashes": {labels1[0]: (3,1),
+               labels1[1]: (1,4.5),
+               labels1[2]: (1,0),
+               '': (0,0)},
 }
-# r'$f$ Ensemble', r'$Q$', r'$f$ Ensemble $+$ $Q$'
-subplot1_kwargs = {**lineplot_kwargs, **{
-    "hue" : hue1,
-    "style" : hue1,
+
+# labels2 = ['Targets', 'Control', 'Targets $+$ Control']
+subplot2_kwargs = {
+    "hue" : 'label',
+    "style" : 'label',
     # "dashes": [(4, 1), (2, 1), (1,1)]
-    "palette": {r'$f$ Ensemble': sns.color_palette()[0],
-                r'$\mathcal{Q}$': sns.color_palette()[1],
-                r'$f$ Ensemble $+$ $\mathcal{Q}$': sns.color_palette()[2]},
-    "dashes": {r'$f$ Ensemble': (3,1),
-               r'$\mathcal{Q}$': (1,4.5),
-               r'$f$ Ensemble $+$ $\mathcal{Q}$': (1,0),
+    "palette": {labels2[0]: sns.color_palette()[2],
+                labels2[1]: sns.color_palette()[3],
+                labels2[2]: sns.color_palette()[4],
+                '': None},
+    "dashes": {labels2[0]: (3,1),
+               labels2[1]: (1,4.5),
+               labels2[2]: (1,0),
                '': (0,0)},
-}}
-# 'Targets', 'Control', 'Targets $+$ Control'
-subplot2_kwargs = {**lineplot_kwargs, **{
-    "hue" : hue2,
-    "style" : hue2,
-    # "dashes": [(4, 1), (2, 1), (1,1)]
-    "palette": {'Targets': sns.color_palette()[3],
-                'Control': sns.color_palette()[4],
-                'Targets $+$ Control': sns.color_palette()[2]},
-    "dashes": {'Targets': (3,1),
-               'Control': (1,4.5),
-               'Targets $+$ Control': (1,0),
-               '': (0,0)},
-}}
+}
 
 # fig, axes = plt.subplots(nrows=1, ncols=2, sharey=True, figsize=(3.3,3.3), layout='constrained')
 fig, axes = plt.subplots(nrows=1, ncols=2, sharey=True, figsize=(3.5,3.0))
 plt.tight_layout()
 
 # Plot on the first axis
-# ax.axhline(y=sac_average_final_value, color=plot_kwargs["palette"]["SAC"], dashes=plot_kwargs["dashes"]["SAC"], label='')
-axes[0].axhline(y=sac_median_final_value, color="grey", dashes=(3,1), lw=1.5, label='')
-g1 = sns.lineplot(data=df_long[df_long['label1'] != ''], ax=axes[0], **subplot1_kwargs)
-# g1.set_xlabel("Time step")
-# g1.set_ylabel("Cumulative Reward")
-g1.set_xlabel("")
-g1.set_ylabel("")
-g1.grid(True)
+axes[0] = sns.lineplot(plot1_df, ax=axes[0], x='global_step', y='median', **subplot1_kwargs)
+for label in plot1_df['label'].unique():
+    color = subplot1_kwargs["palette"][label]
+    temp_df = plot1_df[plot1_df['label']==label]
+    axes[0].fill_between(x=temp_df['global_step'], y1=temp_df['low'], y2=temp_df['high'], color=color, alpha=0.2)
+
+axes[0].set_xlabel("")
+axes[0].set_ylabel("")
+axes[0].grid(True)
 axes[0].legend()
 sns.move_legend(axes[0], "lower center", title="MPPI Ingredients", bbox_to_anchor=(0.5, 1), frameon=False, ncol=1)
 
 # Plot on the second axis
-axes[1].axhline(y=sac_median_final_value, color="grey", dashes=(3,1), lw=1.5, label='')
-g2 = sns.lineplot(data=df_long[df_long['label2'] != ''], ax=axes[1], **subplot2_kwargs,)
-# g2.set_xlabel("Time step")
-g2.set_xlabel("")
-g2.grid(True)
+axes[1] = sns.lineplot(plot2_df, ax=axes[1], x='global_step', y='median', **subplot2_kwargs)
+for label in plot2_df['label'].unique():
+    color = subplot2_kwargs["palette"][label]
+    temp_df = plot2_df[plot2_df['label']==label]
+    axes[1].fill_between(x=temp_df['global_step'], y1=temp_df['low'], y2=temp_df['high'], color=color, alpha=0.2)
+
+axes[1].set_xlabel("")
+axes[1].grid(True)
 axes[1].legend()
 sns.move_legend(axes[1], "lower center", title="MPPI Usage", bbox_to_anchor=(0.5, 1), frameon=False, ncol=1)
 
 # fine-tuning x-ticks
 xticks = np.arange(0, 5*10e4+1, step=10e4)
 yticks = np.arange(0, 3*10e2+1, step=5*10e1)
-g1.set(xticks=xticks, yticks=yticks)
-g2.set(xticks=xticks, yticks=yticks)
-g1.ticklabel_format(style='sci', axis='x', scilimits=(0,0), useMathText=True)
-g2.ticklabel_format(style='sci', axis='x', scilimits=(0,0), useMathText=True)
-g1.xaxis.offsetText.set_visible(False)
+axes[0].set(xticks=xticks, yticks=yticks)
+axes[1].set(xticks=xticks, yticks=yticks)
+axes[0].ticklabel_format(style='sci', axis='x', scilimits=(0,0), useMathText=True)
+axes[1].ticklabel_format(style='sci', axis='x', scilimits=(0,0), useMathText=True)
+axes[0].xaxis.offsetText.set_visible(False)
 
 fig.tight_layout(h_pad=0.5, w_pad=0.5) # need this to squeeze plots together
 # add a big axis, hide frame

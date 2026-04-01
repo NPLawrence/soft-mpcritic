@@ -5,7 +5,7 @@ import wandb
 api = wandb.Api()
 
 # Project is specified by <entity/project-name>
-project = 'dual_mpcritic_ddpg_hopper' # 'ddpg_baseline' # 'sac_baseline' # 'dual_mpcritic_ddpg_sps' # 'dual_mpcritic_ddpg_new_value_with_discount'
+project = 'dual_mpcritic_ddpg_hopper_tb' # 'dual_mpcritic_ddpg_hopper' # 'ddpg_baseline' # 'sac_baseline' # 'dual_mpcritic_ddpg_sps' # 'dual_mpcritic_ddpg_new_value_with_discount'
 runs = api.runs(f"mpcritic-dpc/{project}")
 
 # summary_list, config_list, name_list = [], [], []
@@ -24,6 +24,8 @@ transition_ensemble_size_list = []
 mppi_target_warmstart_list = []
 mppi_target_iterations_list = []
 training_pattern_list = []
+var_list = []
+lambda_list = []
 # sac experiments
 # autotune_list = []
 # all experiments
@@ -46,6 +48,8 @@ dataset = {
     "mppi_target_warmstart": mppi_target_warmstart_list,
     "mppi_target_iterations": mppi_target_iterations_list,
     "training_pattern": training_pattern_list,
+    "var": var_list,
+    "lambda_": lambda_list,
     # sac experiments
     # "autotune": autotune_list,
     # all experiments
@@ -78,6 +82,8 @@ for (i, run) in enumerate(list(runs)):
         mppi_target_warmstart_list.append(config['mppi_target_warmstart'])
         mppi_target_iterations_list.append(config['mppi_target_iterations'])
         training_pattern_list.append(config['training_pattern'])
+        var_list.append(config['var'])
+        lambda_list.append(config['lambda_'])
         # autotune_list.append(config['autotune'])
 
         history = run.scan_history(keys=["charts/episodic_return","global_step"])
