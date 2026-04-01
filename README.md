@@ -2,11 +2,9 @@
 
 This is the codebase for our paper `Soft MPCritic: Amortized model predictive value iteration`
 
-## Concept Diagram
+<img src="misc/softmpcritic_concept.png" alt="Soft MPCritic concept diagram" width="80%" />
 
-![Soft MPCritic concept diagram](misc/softmpcritic_concept.png)
-
-*High-level overview of the Soft MPCritic architecture and training signal flow.*
+*High-level overview of the Soft MPCritic architecture.*
 
 ## Requirements
 
