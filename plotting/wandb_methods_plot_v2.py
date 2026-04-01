@@ -3,6 +3,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+WINDOW = 5000
+TOTAL_LEN = 500_000
+FINAL_LEN = 500_000
+
 project = 'sac_baseline'
 runs_df_sac = pd.read_pickle(f"data/{project}_all_data.pkl")
 runs_df_sac = runs_df_sac[(runs_df_sac['env_id']=='Hopper-v5')]
@@ -16,15 +20,6 @@ runs_df_ddpg = runs_df_ddpg[(runs_df_ddpg['env_id']=='Hopper-v5')]
 runs_df_ddpg = pd.concat([runs_df_ddpg], ignore_index=True)
 runs_df_ddpg['label'] = "DDPG"
 runs_df_ddpg['label'] = runs_df_ddpg['label'].astype("category")
-
-# project = 'dual_mpcritic_ddpg_hopper'
-# runs_df_mppi = pd.read_pickle(f"data/{project}_all_data.pkl")
-# runs_df_mppi = runs_df_mppi[(runs_df_mppi['env_id']=='Hopper-v5')]
-# runs_df_mppi = runs_df_mppi[(runs_df_mppi['training_pattern']=='online')]
-# runs_df_mppi = runs_df_mppi[(runs_df_mppi['target_horizon']==4)]
-# runs_df_mppi = pd.concat([runs_df_mppi], ignore_index=True)
-# runs_df_mppi['label'] = r"\texttt{soft\,MPCritic}"
-# runs_df_mppi['label'] = runs_df_mppi['label'].astype("category")
 
 project = 'dual_mpcritic_ddpg_hopper_tb'
 runs_df_mppi = pd.read_pickle(f"data/{project}_all_data.pkl")
@@ -40,50 +35,85 @@ runs_df_mppi['label'] = runs_df_mppi['label'].astype("category")
 
 print(runs_df_mppi['episodic_return'].iloc[0])
 
-def padded_moving_average(df, columns, window=20, total_len=500_001, final_len=500_001):
-    for column in columns:
-        for i in range(len(df)):
-            df.at[i, column] = pd.Series(df[column].iloc[i]).rolling(window).mean().dropna().to_numpy()
-            if df['global_step'] is not None:
-                df.at[i, 'global_step'] = df.at[i, 'global_step'][window-1:]
+def pad_arrays(df, column, total_len=500_000,):
+    for i in range(len(df)):
+        if df.at[i, 'global_step'] is not None:
+            diffs = np.diff(df.at[i, 'global_step'])
+            repeated_values = np.repeat(df.at[i, column][:-1], diffs)
+            pad_width = total_len - len(repeated_values)
+            repeated_values = np.pad(repeated_values, (0, pad_width), mode='edge')
 
-                diffs = np.diff(df.at[i, 'global_step'])
-                repeated_values = np.repeat(df.at[i, column][:-1], diffs)
-                pad_width = total_len - len(repeated_values)
-                repeated_values = np.pad(repeated_values, (0, pad_width), mode='edge')
+            repeated_steps  = np.arange(total_len)
 
-                repeated_steps  = np.arange(total_len)
+            df.at[i, 'global_step'] = repeated_steps
+            df.at[i, column] = repeated_values
 
-                df.at[i, 'global_step'] = repeated_steps[:final_len][::window]
-                df.at[i, column] = repeated_values[:final_len][::window]
     return df
 
-def median_final_value(df, column):
-    values = []
+def median_low_high(df, column):
+    run_arrays = []
     for i in range(len(df)):
-        values.append(df.at[i, column][-1])
-    values = np.array(values)
-    return np.median(values)
+        run_arrays.append(df.at[i, column][None,:])
 
-window = 20
-plotted_columns = ['global_step', 'episodic_return', 'label']
-temp_df = padded_moving_average(runs_df_sac, ['episodic_return'], window=window, total_len=1_000_001, final_len=1_000_001)
-sac_median_final_value = median_final_value(temp_df, 'episodic_return')
-sac_data = runs_df_sac[plotted_columns]
-sac_data = padded_moving_average(runs_df_sac, ['episodic_return'], window=window, total_len=1_000_001)
-sac_df_long = sac_data.explode(['episodic_return', 'global_step'], ignore_index=True)
+    run_arrays = np.concatenate(run_arrays)
+    run_medians = np.median(run_arrays, axis=0)
+    run_lows = np.percentile(run_arrays, q=20, axis=0, interpolation='midpoint')
+    run_highs = np.percentile(run_arrays, q=80, axis=0, interpolation='midpoint')
 
-ddpg_data = runs_df_ddpg[plotted_columns]
-temp_df = padded_moving_average(runs_df_ddpg, ['episodic_return'], window=window, total_len=1_000_001, final_len=1_000_001)
-ddpg_median_final_value = median_final_value(temp_df, 'episodic_return')
-ddpg_data = padded_moving_average(runs_df_ddpg, ['episodic_return'], window=window, total_len=1_000_001)
-ddpg_df_long = ddpg_data.explode(['episodic_return', 'global_step'], ignore_index=True)
+    return run_medians, run_lows, run_highs
 
-mppi_data = runs_df_mppi[plotted_columns]
-mppi_data = padded_moving_average(runs_df_mppi, ['episodic_return'], window=window)
-mppi_df_long = mppi_data.explode(['episodic_return', 'global_step'], ignore_index=True)
+def moving_average(array):
+    ma = pd.Series(array).rolling(WINDOW).mean().dropna().to_numpy()
+    return ma
 
-df_long = pd.concat([sac_df_long, ddpg_df_long, mppi_df_long])
+def trim(array):
+    return array[:FINAL_LEN][::WINDOW]
+
+def ma_global_step():
+    return np.arange(WINDOW, FINAL_LEN+1, WINDOW)
+
+runs_df_mppi = pad_arrays(runs_df_mppi, 'episodic_return')
+med_mppi, low_mppi, high_mppi = median_low_high(runs_df_mppi, 'episodic_return')
+med_mppi, low_mppi, high_mppi = map(moving_average, [med_mppi, low_mppi, high_mppi])
+med_mppi, low_mppi, high_mppi = map(trim, [med_mppi, low_mppi, high_mppi])
+
+runs_df_ddpg = pad_arrays(runs_df_ddpg, 'episodic_return', total_len=1_000_000)
+med_ddpg, low_ddpg, high_ddpg = median_low_high(runs_df_ddpg, 'episodic_return')
+med_ddpg, low_ddpg, high_ddpg = map(moving_average, [med_ddpg, low_ddpg, high_ddpg])
+ddpg_median_final_value = med_ddpg[-1]
+med_ddpg, low_ddpg, high_ddpg = map(trim, [med_ddpg, low_ddpg, high_ddpg])
+
+runs_df_sac = pad_arrays(runs_df_sac, 'episodic_return', total_len=1_000_000)
+med_sac, low_sac, high_sac = median_low_high(runs_df_sac, 'episodic_return')
+med_sac, low_sac, high_sac = map(moving_average, [med_sac, low_sac, high_sac])
+sac_median_final_value = med_sac[-1]
+med_sac, low_sac, high_sac = map(trim, [med_sac, low_sac, high_sac])
+
+mppi_df = pd.DataFrame({
+    'global_step' : ma_global_step(),
+    'median': med_mppi,
+    'low': low_mppi,
+    'high': high_mppi,
+    'label': r"\texttt{soft\,MPCritic}"
+})
+
+ddpg_df = pd.DataFrame({
+    'global_step' : ma_global_step(),
+    'median': med_ddpg,
+    'low': low_ddpg,
+    'high': high_ddpg,
+    'label': "DDPG"
+})
+
+sac_df = pd.DataFrame({
+    'global_step' : ma_global_step(),
+    'median': med_sac,
+    'low': low_sac,
+    'high': high_sac,
+    'label': "SAC"
+})
+
+plot_df = pd.concat([mppi_df, ddpg_df, sac_df], ignore_index=True)
 hue = 'label'
 
 sns.set(palette='husl', style='ticks')
@@ -109,18 +139,18 @@ params = {
         "font.serif" : ["Computer Modern Serif"]}
 plt.rcParams.update(params)
 
-def min_max_error(x):
-    return x.min(), x.max()
+fig, ax = plt.subplots(figsize=(3.5,3.0))
+plt.tight_layout()
 
-lineplot_kwargs = {
-    "x" : "global_step",
-    "y" : "episodic_return",
-    "estimator" : np.median, # "median", # np.median
-    "errorbar" : min_max_error, # ("pi", 80), # min_max_error
-    "alpha" : 1.0,
-}
+# lineplot_kwargs = {
+#     "x" : "global_step",
+#     "y" : "episodic_return",
+#     "estimator" : np.median, # "median", # np.median
+#     "errorbar" : min_max_error, # ("pi", 80), # min_max_error
+#     "alpha" : 1.0,
+# }
 # r'$f$ Ensemble', r'$Q$', r'$f$ Ensemble $+$ $Q$'
-plot_kwargs = {**lineplot_kwargs, **{
+plot_kwargs = {
     "hue" : hue,
     "style" : hue,
     "palette": {"SAC": sns.color_palette()[0],
@@ -130,17 +160,25 @@ plot_kwargs = {**lineplot_kwargs, **{
                "DDPG": (1,4.5),
                r"\texttt{soft\,MPCritic}": (1,0),
                '': (0,0)},
-}}
+}
 
-fig, ax = plt.subplots(figsize=(3.5,3.0))
-plt.tight_layout()
-
-# Plot on axis
 ax.axhline(y=sac_median_final_value, color=plot_kwargs["palette"]["SAC"], dashes=plot_kwargs["dashes"]["SAC"], label='')
 ax.axhline(y=ddpg_median_final_value, color=plot_kwargs["palette"]["DDPG"], dashes=plot_kwargs["dashes"]["DDPG"], label='')
 # ax.axhline(y=sac_median_final_value, color="grey", dashes=plot_kwargs["dashes"]["SAC"], lw=1.5, label='')
 # ax.axhline(y=ddpg_median_final_value, color="grey", dashes=plot_kwargs["dashes"]["DDPG"], lw=1.5, label='')
-ax = sns.lineplot(data=df_long, ax=ax, **plot_kwargs)
+ax = sns.lineplot(plot_df, ax=ax, x='global_step', y='median', **plot_kwargs)
+
+palette_key = list(plot_kwargs["palette"].keys())[0]
+color = plot_kwargs["palette"][palette_key]
+ax.fill_between(x=sac_df['global_step'], y1=sac_df['low'], y2=sac_df['high'], color=color, alpha=0.2)
+
+palette_key = list(plot_kwargs["palette"].keys())[1]
+color = plot_kwargs["palette"][palette_key]
+ax.fill_between(x=ddpg_df['global_step'], y1=ddpg_df['low'], y2=ddpg_df['high'], color=color, alpha=0.2)
+
+palette_key = list(plot_kwargs["palette"].keys())[2]
+color = plot_kwargs["palette"][palette_key]
+ax.fill_between(x=mppi_df['global_step'], y1=mppi_df['low'], y2=mppi_df['high'], color=color, alpha=0.2)
 
 ax.set_xlabel("Time step")
 ax.set_ylabel("Cumulative reward")
@@ -153,7 +191,6 @@ xticks = np.arange(0, 5*10e4+1, step=10e4)
 yticks = np.arange(0, 3*10e2+1, step=5*10e1)
 ax.set(xticks=xticks, yticks=yticks)
 ax.ticklabel_format(style='sci', axis='x', scilimits=(0,0), useMathText=True)
-# ax.xaxis.offsetText.set_visible(False)
 
 plt.tight_layout(h_pad=0.5, w_pad=0.5) # need this to squeeze plots together
 
